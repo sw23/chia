@@ -3,7 +3,7 @@ cluster_name: ec2_test
 aws_nodes:
     region: us-east-1
     ec2_worker:
-        KeyName: jack
+        KeyName: ${EC2_KEYNAME}
         InstanceType: t2.micro
         count: 2
         ImageId: ami-0ea87431b78a82070
@@ -15,14 +15,14 @@ aws_nodes:
                 SpotInstanceType: one-time
 
     ec2_verilator:
-        KeyName: jack
+        KeyName: ${EC2_KEYNAME}
         InstanceType: t3.2xlarge
         count: 2
         ImageId: ami-0ec10929233384c7f
         ssh_user: ubuntu
         skip_default_setup: false # defaults to false, included here as demonstration
         setup_commands:
-            - "echo ${WORK_DIR}WORK_DIR}GITHUB_TOKEN} | docker login ghcr.io -u ${WORK_DIR}WORK_DIR}USER} --password-stdin"
+            - "echo ${GITHUB_TOKEN} | docker login ghcr.io -u ${USER} --password-stdin"
         InstanceMarketOptions:
             MarketType: spot
             SpotOptions:
@@ -48,7 +48,7 @@ available_node_types:
         max_workers: 4
         docker:
             image: "ghcr.io/ucb-bar/chia-verilator-run:latest"
-            container_name: "chia-verilator-run-${WORK_DIR}WORK_DIR}USER}"
+            container_name: "chia-verilator-run-${USER}"
             pull_before_run: True
             run_options:
                 - --ulimit nofile=65536:65536

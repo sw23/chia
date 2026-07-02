@@ -4,7 +4,7 @@ Runs the hello.riscv binary on the FastRTLSimRocketConfig simulator
 as a Ray remote task on a verilator_run resource node.
 
 Usage:
-    ray job submit --address IP:6379 --working-dir /scratch/acui/chia \
+    ray job submit --address IP:6379 --working-dir /path/to/chia \
         -- python test/test_verilator_run.py
 """
 

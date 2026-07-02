@@ -6,7 +6,7 @@ environment has the correct runtime dependencies.
 
 cd chipyard
 source env.sh && source sims/firesim/env.sh && cd sims/firesim/sim && make TARGET_PROJECT=firesim \
-  TARGET_PROJECT_MAKEFRAG=/scratch/acui/chipyard/generators/firechip/chip/src/main/makefrag/firesim verilator
+  TARGET_PROJECT_MAKEFRAG=/path/to/chipyard/generators/firechip/chip/src/main/makefrag/firesim verilator
 
 This builds the target config FireSimRocketConfig
 
@@ -20,7 +20,7 @@ class RocketConfig extends Config(
   new chipyard.config.AbstractConfig)
 
 Usage:
-    ray job submit --address <head>:6379 --working-dir /scratch/acui/chia \
+    ray job submit --address <head>:6379 --working-dir /path/to/chia \
         -- python test/test_firesim_metasim_run.py
 """
 

@@ -28,7 +28,7 @@ provider:
 
 auth:
     ssh_user: ${USER}
-    ssh_private_key: /home/eecs/${USER}/.ssh/${USER}
+    ssh_private_key: /home/${USER}/.ssh/${USER}
 
 file_mounts: {}
 

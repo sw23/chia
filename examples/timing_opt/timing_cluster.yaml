@@ -122,7 +122,7 @@ provider:
 # How Ray will authenticate with newly launched nodes.
 auth:
     ssh_user: ${USER}
-    # ssh_private_key: /home/eecs/${USER}/.ssh/${USER}
+    # ssh_private_key: /home/${USER}/.ssh/${USER}
 
 # 2 verilator_run + 2 chisel_build + 1 llm + 2 vlsi = 7 workers.
 min_workers: 7

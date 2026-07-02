@@ -84,7 +84,7 @@ auth:
     # The machine that runs ray up executes SSH commands to set up the Ray head node. The Ray head node subsequently
     # executes SSH commands to set up the Ray worker nodes. When you run ray up, ssh credentials sitting on the ray up
     # machine are copied to the head node -- internally, the ssh key is added to the list of file mounts to rsync to head node.
-    ssh_private_key: /home/eecs/${USER}/.ssh/${USER}
+    ssh_private_key: /home/${USER}/.ssh/${USER}
 
 rsync_exclude:
     - "**/.git"
