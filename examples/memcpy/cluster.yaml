@@ -23,7 +23,7 @@ provider:
 
 auth:
     ssh_user: ${USER}
-    ssh_private_key: ~/.ssh/angelacui
+    # ssh_private_key: ~/.ssh/<ssh_key_name>   # omit if your key is in ssh-agent
 
 available_node_types:
 

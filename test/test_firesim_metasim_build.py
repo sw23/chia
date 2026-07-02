@@ -20,7 +20,7 @@ class FireSimRocketConfig extends Config(
 Output binary: sims/firesim/sim/generated-src/f1/f1-firesim-FireSim-FireSimRocketConfig-BaseF1Config/VFireSim
 
 Usage:
-    ray job submit --address <head>:6379 --working-dir /scratch/acui/chia \
+    ray job submit --address <head>:6379 --working-dir /path/to/chia \
         -- python test/test_firesim_metasim_build.py
 """
 

@@ -3,7 +3,7 @@
 #
 # Head also hosts the chisel_build + riscv_build containers; verilator worker hosts
 # the verilator_run container — same head+worker split pattern as the canonical
-# /scratch/ferran/chia-v0/test.yaml.
+# general tester cluster (../test.yaml).
 #
 # TODO: merge this into the general tester cluster (../test.yaml) once that
 # config grows a `riscv_build` node-type entry. There's no reason to maintain
@@ -52,7 +52,7 @@ provider:
 
 auth:
     ssh_user: ${USER}
-    ssh_private_key: /home/eecs/${USER}/.ssh/${USER}
+    ssh_private_key: /home/${USER}/.ssh/${USER}
 
 file_mounts: {}
 
