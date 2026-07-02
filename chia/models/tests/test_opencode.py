@@ -616,6 +616,25 @@ def test_prompt_run_then_export_success(monkeypatch):
     assert llm._last_metadata["num_turns"] == 1
 
 
+def test_prompt_log_write_failure_is_non_fatal(monkeypatch, tmp_path):
+    """Regression: prompt() may run on a remote worker whose filesystem lacks
+    the driver-side log_dir. The transcript log write is best-effort — an
+    unwritable log path must not fail an otherwise-successful call."""
+    _install_fake_subprocess(
+        monkeypatch,
+        run_stdout=_step_start("ses_log1"),
+        export_obj=_export_obj(text="PONG"),
+        capture={"calls": []},
+    )
+    llm = OpenCodeLLM(log_dir=str(tmp_path / "logs"))
+    # Simulate the remote worker: the log prefix points somewhere this host
+    # cannot create (as the driver-side path wouldn't exist in the container).
+    llm._log_prefix = "/proc/nonexistent/opencode_x"
+    cli = llm.prompt("Reply with PONG", tools=[])
+    assert cli.success is True
+    assert cli.result == "PONG"
+
+
 def test_prompt_export_error_raises_despite_exit_0(monkeypatch):
     """Core fix end-to-end: run exits 0 but the export carries a structured
     error, so prompt must classify + raise (not return a bogus success)."""

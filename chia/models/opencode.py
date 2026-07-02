@@ -19,9 +19,10 @@ import os
 import re
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 import ray
 
@@ -231,6 +232,75 @@ def parse_run_error(stdout: str) -> Optional[dict]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Custom model providers
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class AdditionalModelProvider:
+    """A custom model provider to inject into the opencode config's ``provider`` block.
+
+    opencode is provider-agnostic: beyond its built-in providers you can declare a
+    custom or self-hosted one — an OpenAI-compatible endpoint, a private gateway, a
+    local vLLM/Ollama server, etc. — directly in the config under ``provider.<id>``.
+    Each entry names the AI-SDK loader package (``npm``), a display ``name``, the SDK
+    ``options`` (notably ``base_url`` / ``api_key``), and the ``models`` the provider
+    serves. See https://opencode.ai/docs/providers (Custom providers) for the schema.
+
+    Once declared, select one of its models by passing ``model="<id>/<model-id>"`` to
+    :class:`OpenCodeLLM` — e.g. ``AdditionalModelProvider(id="my-vllm", ...)`` exposes
+    its models as ``my-vllm/<model-id>``.
+
+    Attributes:
+        id: Provider key. Used both as the key under ``provider`` in the config and
+            as the ``provider`` half of ``provider/model``. Must be unique.
+        models: Either a list of model-id strings (each expands to a bare ``{}``
+            entry) or a dict mapping model-id -> model config, e.g.
+            ``{"name": ..., "limit": {...}, "cost": {...}, "options": {...}}``.
+        npm: The AI-SDK package opencode loads to talk to this provider. Defaults to
+            ``@ai-sdk/openai-compatible``, which fits any OpenAI-compatible endpoint.
+        name: Human-readable display name (defaults to ``id`` when omitted).
+        base_url: Endpoint URL; written to ``options.baseURL``. Optional if supplied
+            via ``options`` instead.
+        api_key: Credential; written to ``options.apiKey``. May be a literal secret
+            or an opencode ``{env:NAME}`` template that opencode expands at runtime
+            (preferred — keeps the secret out of the on-disk config file).
+        options: Extra SDK options merged into the provider's ``options`` block
+            (e.g. ``headers``, custom timeouts). On conflict these win over
+            ``base_url`` / ``api_key``.
+    """
+
+    id: str
+    models: Union[List[str], Dict[str, dict]]
+    npm: str = "@ai-sdk/openai-compatible"
+    name: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    options: Optional[Dict[str, object]] = None
+
+    def to_config_entry(self) -> dict:
+        """Render this provider as an opencode ``provider.<id>`` config value."""
+        options: dict = {}
+        if self.base_url is not None:
+            options["baseURL"] = self.base_url
+        if self.api_key is not None:
+            options["apiKey"] = self.api_key
+        if self.options:
+            options.update(self.options)
+
+        # A list of ids -> bare ``{id: {}}`` entries; a dict is passed through.
+        if isinstance(self.models, dict):
+            models = dict(self.models)
+        else:
+            models = {model_id: {} for model_id in self.models}
+
+        entry: dict = {"npm": self.npm, "name": self.name or self.id, "models": models}
+        if options:
+            entry["options"] = options
+        return entry
+
+
 class OpenCodeLLM(LLMCallBase):
     """Wraps the ``opencode`` CLI as an LLM backend.
 
@@ -253,6 +323,7 @@ class OpenCodeLLM(LLMCallBase):
         agent_name: str = "chia",
         work_dir: Optional[str] = None,
         extra_cli_args: Optional[List[str]] = None,
+        additional_providers: Optional[List[AdditionalModelProvider]] = None,
     ):
         super().__init__(system_message=system_message)
         self.logging_level = logging_level
@@ -264,6 +335,7 @@ class OpenCodeLLM(LLMCallBase):
         self.agent_name = agent_name
         self.work_dir = work_dir
         self.extra_cli_args = extra_cli_args or []
+        self.additional_providers = additional_providers or []
         self.logger = logging.getLogger(logging_name)
         self._last_metadata: dict = {}
         self._last_export_error: Optional[dict] = None
@@ -485,8 +557,8 @@ class OpenCodeLLM(LLMCallBase):
     def _build_config(self, tools: List[ChiaTool]) -> dict:
         """Build the opencode config (written to OPENCODE_CONFIG).
 
-        Defines the ``chia`` agent carrying our system prompt, and one remote
-        MCP server per ChiaTool.
+        Defines the ``chia`` agent carrying our system prompt, one remote MCP
+        server per ChiaTool, and any custom model providers passed at construction.
         """
         cfg: dict = {
             "$schema": "https://opencode.ai/config.json",
@@ -507,6 +579,10 @@ class OpenCodeLLM(LLMCallBase):
                     "enabled": True,
                 }
             cfg["mcp"] = mcp
+        if self.additional_providers:
+            provider_cfg: dict = cfg.setdefault("provider", {})
+            for provider in self.additional_providers:
+                provider_cfg[provider.id] = provider.to_config_entry()
         return cfg
 
     def _build_run_cmd(self, user_message: str) -> list:
@@ -595,14 +671,24 @@ class OpenCodeLLM(LLMCallBase):
         self._last_export_error = export_error or run_error
 
         if self._log_prefix is not None:
-            truncated = user_message[:500] + ("..." if len(user_message) > 500 else "")
-            with open(f"{self._log_prefix}.log", "a") as f:
-                f.write("=" * 80 + "\n")
-                f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] session {session_id}\n")
-                f.write("=" * 80 + "\n\n")
-                f.write(f"[User Message]\n{truncated}\n\n")
-                f.write(stream)
-                f.write("-" * 80 + "\n\n")
+            # Best-effort only: prompt() may run on a remote worker whose
+            # filesystem lacks the (driver-side) log_dir — a logging hiccup must
+            # never fail an otherwise-successful call. The transcript is always
+            # returned in stream_result regardless.
+            try:
+                os.makedirs(os.path.dirname(self._log_prefix), exist_ok=True)
+                truncated = user_message[:500] + ("..." if len(user_message) > 500 else "")
+                with open(f"{self._log_prefix}.log", "a") as f:
+                    f.write("=" * 80 + "\n")
+                    f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] session {session_id}\n")
+                    f.write("=" * 80 + "\n\n")
+                    f.write(f"[User Message]\n{truncated}\n\n")
+                    f.write(stream)
+                    f.write("-" * 80 + "\n\n")
+            except OSError as exc:
+                self.logger.warning(
+                    "Could not write opencode log %s.log: %s", self._log_prefix, exc
+                )
 
         return QueryResult(
             result=final_text,

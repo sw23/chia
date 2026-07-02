@@ -71,7 +71,7 @@ available_node_types:
 aws_nodes:
     region: us-east-1
     vllm_aws:
-        KeyName: jack                       # TODO: your EC2 key pair name
+        KeyName: ${EC2_KEYNAME}                       # TODO: your EC2 key pair name
         # g5.xlarge = 1x NVIDIA A10G (24 GB), 4 vCPU, 16 GB RAM, ~$1/hr on-demand.
         # Plenty for Qwen2.5-3B/7B. Use g5.2xlarge+ for bigger models.
         InstanceType: g5.xlarge
@@ -85,8 +85,6 @@ aws_nodes:
         ImageId: ami-0995cd07358db88b4
         ssh_user: ubuntu
         setup_commands:
-            # Pull the (private) chia-vllm image; jack2bs is the GHCR username.
-            - "echo ${GITHUB_TOKEN} | docker login ghcr.io -u {USER} --password-stdin"
             # Host GPU driver must be present.
             - "nvidia-smi"
             # Ensure the NVIDIA Container Toolkit so `docker run --gpus all` works.
