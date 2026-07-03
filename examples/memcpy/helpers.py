@@ -1,6 +1,6 @@
 """Helpers for the MemCpy example: classification, output dumping, git diff.
 
-Logic kept out of ``claude.py`` (which drives the LLM) and ``memcpy_loop.py``
+Logic kept out of ``llm.py`` (which drives the LLM) and ``memcpy_loop.py``
 (the orchestration). ``classify_run`` turns a verilator :class:`RunResult` into
 an :class:`Outcome` the loop branches on; :class:`Dumper` / :func:`dump_llm`
 write per-run collateral into ``OUT_DIR``; :func:`collect_diff` is a chipyard

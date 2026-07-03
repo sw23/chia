@@ -858,3 +858,51 @@ def test_live_generic_stream_log_tool_conversation(maas_bash_tool):
     stream = llm.prompt(_TOOL_PROMPT, tools=[maas_bash_tool]).stream_result
     _assert_log_banner(stream, model, "chat.completions")
     _assert_tool_conversation_log(stream, maas_bash_tool.name)
+
+
+# ---------------------------------------------------------------------------
+# Permission controls (live): VertexGeminiLLM is a raw-API backend with no
+# permission gate, so dangerously_skip_permissions / permission warn and are
+# ignored. This live test proves passing them does not break a real call.
+# ---------------------------------------------------------------------------
+import warnings as _warnings  # noqa: E402
+
+
+@live
+def test_live_unsupported_permission_args_warn_but_run():
+    with _warnings.catch_warnings(record=True) as rec:
+        _warnings.simplefilter("always")
+        llm = VertexGeminiLLM(
+            model=os.environ.get("VERTEX_TEST_MODEL", _VERTEX_GEMINI_DEFAULT_MODEL),
+            system_message="You answer with a single word and nothing else.",
+            max_tokens=64,
+            dangerously_skip_permissions=True,
+            config={"x": "y"},
+        )
+    msgs = " ".join(str(w.message) for w in rec)
+    assert "does not support 'dangerously_skip_permissions'" in msgs
+    assert "does not support a 'config'" in msgs
+    cli = llm.prompt("Reply with exactly the word: PONG", tools=[])
+    assert cli.success is True
+    assert "PONG" in cli.result.upper()
+
+
+# Worker for this test: `chia up chia/models/tests/cluster/all_models.yaml`
+# (advertises vertex_creds); the remote_prompt fixture skips if it's absent.
+@pytest.mark.live_remote
+def test_live_remote_unsupported_permission_args_warn_but_run(remote_prompt):
+    with _warnings.catch_warnings(record=True) as rec:
+        _warnings.simplefilter("always")
+        llm = VertexGeminiLLM(
+            model=os.environ.get("VERTEX_TEST_MODEL", _VERTEX_GEMINI_DEFAULT_MODEL),
+            system_message="You answer with a single word and nothing else.",
+            max_tokens=64,
+            dangerously_skip_permissions=True,
+            config={"x": "y"},
+        )
+    msgs = " ".join(str(w.message) for w in rec)
+    assert "does not support 'dangerously_skip_permissions'" in msgs
+    assert "does not support a 'config'" in msgs
+    cli = remote_prompt(llm, "Reply with exactly the word: PONG", "vertex_creds")
+    assert cli.success is True
+    assert "PONG" in cli.result.upper()

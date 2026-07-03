@@ -1,8 +1,10 @@
 """LLM nodes for the MemCpy example: implement + debug.
 
-Both nodes drive a :class:`chia.models.claude.ClaudeCodeLLM` over the
-``chipyard_bash`` MCP tool (a BashTool deployed into the chipyard container).
-A single LLM instance is shared across the whole loop so the debug calls
+Both nodes drive an LLM backend — :class:`chia.models.claude.ClaudeCodeLLM` or
+:class:`chia.models.opencode.OpenCodeLLM`, chosen per run with ``--llm`` — over
+the ``chipyard_bash`` MCP tool (a BashTool deployed into the chipyard
+container). A single LLM instance is built once (see :func:`make_llm`) and
+reused across the whole loop; for Claude Code that lets the debug calls
 ``--resume`` the implement session and remember what they already tried.
 
   * :func:`implement` — first call. Writes ``memcpy.scala`` (the RoCC
@@ -24,7 +26,9 @@ from pathlib import Path
 
 from chia.base.ChiaFunction import get
 from chia.base.tools.BashTool import BashTool
-from chia.models.claude import ClaudeCodeLLM, ClaudeCodeQueryResult
+from chia.base.llm_call import QueryResult
+from chia.models.claude import ClaudeCodeLLM
+from chia.models.opencode import OpenCodeLLM
 
 from constants import (
     BUILD_CONFIG,
@@ -38,6 +42,8 @@ from constants import (
     LLM_SYSTEM_MESSAGE,
     LLM_TIMEOUT_SECONDS,
     MAX_OUTPUT_CHARS,
+    OPENCODE_MODEL,
+    OPENCODE_RESOURCE,
 )
 from helpers import Outcome
 from chia.chipyard.state_def import BuildArtifact, RunResult
@@ -166,58 +172,75 @@ def format_sim_failure(
 
 
 # ---------------------------------------------------------------------------
-# LLM nodes  (dispatched onto the dedicated claude / "llm" worker)
+# LLM nodes  (dispatched onto the dedicated claude "llm" or "opencode" worker)
 # ---------------------------------------------------------------------------
 #
-# chia.models.claude.ClaudeCodeLLM.prompt is itself a @ChiaFunction, so the
-# claude CLI runs on the worker that holds the "llm" resource, not on the head.
-# implement (the first call) and every debug call share ONE session: we pin a
-# fixed session_id and thread the session transcript bytes from each call into
-# the next (the @_session_tracked wrapper syncs cli.session_transcript on get),
-# so the debugger resumes the implement conversation and remembers prior fixes.
+# Both ClaudeCodeLLM.prompt and OpenCodeLLM.prompt are @ChiaFunctions, so the
+# CLI runs on the worker holding the backend's resource ("llm" for claude,
+# "opencode_creds" for opencode), not on the head. The backend is chosen per run
+# via the loop's --llm flag.
+#
+# Claude: implement (first call) and every debug call share ONE session — a
+# fixed session_id plus the session transcript threaded from each call into the
+# next (the @_session_tracked wrapper syncs cli.session_transcript on get), so
+# the debugger resumes the implement conversation and remembers prior fixes.
+# Session persistence for other backends (opencode) is in development; for now
+# each opencode call is independent and the full failure context is re-supplied
+# inline (see format_build_failure / format_sim_failure) regardless.
 
 
-def implement(chipyard_bash: BashTool, session_id: str) -> ClaudeCodeQueryResult:
+def make_llm(backend: str, chipyard_bash: BashTool):
+    """Build the implement/debug LLM ONCE, to be reused across the whole loop.
+
+    Reusing a single instance is what lets ``ClaudeCodeLLM``'s
+    ``@_session_tracked`` wrapper thread the session automatically: each
+    ``get()`` syncs the transcript *and* advances the call counter onto this
+    instance, so every ``debug`` call ``--resume``s the ``implement``
+    conversation with no manual session bookkeeping. (Session persistence for
+    OpenCode is in development — each OpenCode call is independent — so reuse is
+    just a convenience there; the failure context is re-supplied inline.)
+    """
+    if backend == "opencode":
+        return OpenCodeLLM(
+            model=OPENCODE_MODEL,
+            system_message=LLM_SYSTEM_MESSAGE,
+            timeout_seconds=LLM_TIMEOUT_SECONDS,
+            logging_name="memcpy_generator",
+            # Restrict opencode to ONLY the chipyard_bash MCP tool. Its built-in
+            # write/edit/bash tools act on the opencode container's own FS, not
+            # the chipyard container — deny all, allow just this MCP server.
+            config={"*": "deny", f"{chipyard_bash.name}_*": "allow"},
+        )
+    return ClaudeCodeLLM(
+        model=LLM_MODEL,
+        system_message=LLM_SYSTEM_MESSAGE,
+        timeout_seconds=LLM_TIMEOUT_SECONDS,
+        logging_name="memcpy_generator",
+        resume_session=True,   # implement + every debug call share one session
+        projects_cwd=None,     # derive from the llm worker's CWD
+        extra_cli_args=list(LLM_EXTRA_CLI_ARGS),
+    )
+
+
+def _run_llm(llm, prompt: str, chipyard_bash: BashTool) -> QueryResult:
+    """Dispatch *prompt* to *llm*'s worker (its backend's creds resource)."""
+    resources = (
+        {"opencode_creds": OPENCODE_RESOURCE}
+        if isinstance(llm, OpenCodeLLM)
+        else {"llm": LLM_RESOURCE}
+    )
+    return get(
+        llm.prompt.options(resources=resources).chia_remote(llm, prompt, [chipyard_bash])
+    )
+
+
+def implement(llm, chipyard_bash: BashTool) -> QueryResult:
     """First call: write the accelerator + config wiring via chipyard_bash."""
-    llm = ClaudeCodeLLM(
-        model=LLM_MODEL,
-        system_message=LLM_SYSTEM_MESSAGE,
-        timeout_seconds=LLM_TIMEOUT_SECONDS,
-        logging_name="memcpy_generator",
-        resume_session=True,
-        projects_cwd=None,  # derive from the llm worker's CWD
-        extra_cli_args=list(LLM_EXTRA_CLI_ARGS),
-    )
-    llm._session_id = session_id
-    return get(
-        llm.prompt.options(resources={"llm": LLM_RESOURCE}).chia_remote(
-            llm, _IMPLEMENT_TASK, [chipyard_bash]
-        )
-    )
+    return _run_llm(llm, _IMPLEMENT_TASK, chipyard_bash)
 
 
-def debug(
-    chipyard_bash: BashTool, session_id: str, transcript: bytes, feedback: str
-) -> ClaudeCodeQueryResult:
-    """Feedback call: resume the session to diagnose and fix *feedback*."""
-    llm = ClaudeCodeLLM(
-        model=LLM_MODEL,
-        system_message=LLM_SYSTEM_MESSAGE,
-        timeout_seconds=LLM_TIMEOUT_SECONDS,
-        logging_name="memcpy_generator",
-        resume_session=True,
-        projects_cwd=None,  # derive from the llm worker's CWD
-        extra_cli_args=list(LLM_EXTRA_CLI_ARGS),
-    )
-    # Resume the shared session and paste the carried transcript onto the chosen
-    # worker before the CLI runs.
-    llm._session_id = session_id
-    llm._call_counter = 1
-    if transcript:
-        llm._session_transcript = transcript
-    prompt = f"{_DEBUGGER_PREAMBLE}\n\n{feedback}"
-    return get(
-        llm.prompt.options(resources={"llm": LLM_RESOURCE}).chia_remote(
-            llm, prompt, [chipyard_bash]
-        )
-    )
+def debug(llm, chipyard_bash: BashTool, feedback: str) -> QueryResult:
+    """Feedback call: diagnose and fix *feedback*. For claude this ``--resume``s
+    the shared implement session (the reused instance carries the transcript +
+    counter); for opencode the full failure context is inline in *feedback*."""
+    return _run_llm(llm, f"{_DEBUGGER_PREAMBLE}\n\n{feedback}", chipyard_bash)

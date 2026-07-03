@@ -45,7 +45,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from uuid import uuid4
 import ray
 
 from chia.base.ChiaFunction import get
@@ -76,11 +75,12 @@ from constants import (
     VERILATOR_TIMEOUT_SECONDS,
     VERILATOR_WORK_DIR,
 )
-from claude import (
+from llm import (
     debug,
     format_build_failure,
     format_sim_failure,
     implement,
+    make_llm,
 )
 from helpers import (
     Dumper,
@@ -185,11 +185,13 @@ def verilator_run(dump: Dumper, attempt: int, artifact, riscv_name, riscv_conten
 # Main loop
 # ---------------------------------------------------------------------------
 
-def run_loop() -> dict:
+def run_loop(llm_backend: str = "claude") -> dict:
     ray.init(address="auto", runtime_env=RUNTIME_ENV)
     dump = Dumper(OUT_DIR)
     run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    summary: dict = {"timestamp": run_ts, "config": BUILD_CONFIG, "attempts": []}
+    summary: dict = {"timestamp": run_ts, "config": BUILD_CONFIG,
+                     "llm_backend": llm_backend, "attempts": []}
+    logger.info("LLM backend: %s", llm_backend)
 
     # ----- deploy the chipyard bash MCP tool -----------------------------
     logger.info("Deploying chipyard_bash into the chipyard container")
@@ -209,11 +211,11 @@ def run_loop() -> dict:
     )
     logger.info("Chipyard reset: %s", reset_out or "clean")
 
-    # One shared LLM session across implement + every debug call; the transcript
-    # bytes are threaded from each call into the next so the debugger resumes
-    # the implement conversation.
-    session_id = str(uuid4())
-    transcript: bytes = b""
+    # One LLM instance, reused across implement + every debug call. For claude
+    # (resume_session=True) this is what carries the session: @_session_tracked
+    # syncs the transcript and advances the call counter on each get(), so debug
+    # calls --resume the implement conversation with no manual threading here.
+    llm = make_llm(llm_backend, chipyard_bash)
 
     # ----- parallel phase: test build || implement ----------------------
     logger.info("Dispatching test build (parallel with implement)")
@@ -222,9 +224,8 @@ def run_loop() -> dict:
         resources={"chipyard": TEST_BUILD_RESOURCE}
     ).chia_remote(source_content, CHIPYARD_TESTS_DIR, TEST_NAME, TEST_BUILD_TIMEOUT_SECONDS)
 
-    logger.info("Running implement node (Claude writes memcpy.scala)")
-    impl = implement(chipyard_bash, session_id)
-    transcript = impl.session_transcript or transcript
+    logger.info("Running implement node (writes memcpy.scala via chipyard_bash)")
+    impl = implement(llm, chipyard_bash)
     dump_llm(dump, "implement", impl)
     logger.info("Implement finished (success=%s)", impl.success)
 
@@ -267,8 +268,7 @@ def run_loop() -> dict:
             feedback = format_build_failure(artifact, attempt + 1)
             dump.text(f"feedback_attempt{attempt + 1}.md", feedback)
             logger.info("Debugging build failure (attempt %d)", attempt + 1)
-            dbg = debug(chipyard_bash, session_id, transcript, feedback)
-            transcript = dbg.session_transcript or transcript
+            dbg = debug(llm, chipyard_bash, feedback)
             dump_llm(dump, f"debug_attempt{attempt + 1}", dbg)
             if not dbg.success:
                 logger.error("Debug node failed — giving up")
@@ -295,8 +295,7 @@ def run_loop() -> dict:
         feedback = format_sim_failure(run, outcome, test.dump, attempt + 1)
         dump.text(f"feedback_attempt{attempt + 1}.md", feedback)
         logger.info("Debugging sim failure (attempt %d)", attempt + 1)
-        dbg = debug(chipyard_bash, session_id, transcript, feedback)
-        transcript = dbg.session_transcript or transcript
+        dbg = debug(llm, chipyard_bash, feedback)
         dump_llm(dump, f"debug_attempt{attempt + 1}", dbg)
         if not dbg.success:
             logger.error("Debug node failed — giving up")
@@ -310,4 +309,14 @@ def run_loop() -> dict:
 
 
 if __name__ == "__main__":
-    run_loop()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="MemCpy RoCC agentic build/run/debug loop")
+    parser.add_argument(
+        "--llm", choices=["claude", "opencode"], default="claude",
+        help="LLM backend for the implement/debug nodes: 'claude' (Claude Code, "
+             "dispatched to the llm node, default) or 'opencode' (dispatched to "
+             "the opencode node). The chosen backend's node must be up in the cluster.",
+    )
+    args = parser.parse_args()
+    run_loop(llm_backend=args.llm)

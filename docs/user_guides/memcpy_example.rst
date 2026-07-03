@@ -62,10 +62,11 @@ Components
        ``memcpy.c`` into ``$chipyard/tests``, registers a CMake target, builds
        ``build/memcpy.riscv`` + ``build/memcpy.dump``, and reads them back.
        Runs on the chipyard container.
-   * - ``claude.py``
-     - The implement + debug LLM nodes (:class:`chia.models.claude.ClaudeCodeLLM`)
-       and the failure-feedback formatters. LLM calls are dispatched onto the
-       dedicated ``llm`` (claude) node, sharing one session.
+   * - ``llm.py``
+     - The implement + debug LLM nodes (Claude Code or OpenCode, chosen with
+       ``--llm``) and the failure-feedback formatters. LLM calls are dispatched
+       onto the chosen backend's node (``llm`` for Claude Code, ``opencode`` for
+       OpenCode); Claude Code shares one resumable session across the calls.
    * - ``helpers.py``
      - Run-outcome classification (``classify_run``), the ``out/`` dumper, the
        chipyard git-diff node (``collect_diff``), and dramsim-ini loading.
@@ -100,28 +101,32 @@ sync with ``memcpy.c``).
 Running it
 ----------
 
-The bundled ``cluster.yaml`` brings up three node types — one chisel-build
-(``chipyard``), one verilator (``verilator_run``), and one claude (``llm``)
-node. The ``llm`` node mounts your Claude Code credentials; see the note at the
-top of ``cluster.yaml``.
+The bundled ``cluster.yaml`` brings up a chisel-build (``chipyard``) node, a
+verilator (``verilator_run``) node, and an LLM node. The implement/debug LLM
+can be either **Claude Code** (the ``llm`` node) or **OpenCode** (the
+``opencode`` node) — keep both up and pick per run with ``--llm`` (default
+``claude``), or comment out the one you don't use. Each backend reads its
+credentials from the mounts shown at the top of ``cluster.yaml``.
 
 .. code-block:: bash
-  
+
    export THIS_MACHINE="your_machine_ip"
    chia up   examples/memcpy/cluster.yaml
-   chia job submit -- python $PWD/examples/memcpy/memcpy_loop.py   # run from the repo root
+   # pick the backend with --llm (claude is the default); run from the repo root:
+   chia job submit -- python $PWD/examples/memcpy/memcpy_loop.py --llm claude
+   chia job submit -- python $PWD/examples/memcpy/memcpy_loop.py --llm opencode
    chia down examples/memcpy/cluster.yaml
 
 Pass the absolute path to ``memcpy_loop.py``. The driver runs on the cluster head,
 where the repo lives, so ``out/`` is written into the real
 ``examples/memcpy/out``.
 
-The LLM calls run on the dedicated ``llm`` node:
-:meth:`chia.models.claude.ClaudeCodeLLM.prompt` is itself a ``ChiaFunction``, so
-the loop dispatches it with ``llm.prompt.options(resources={"llm": 1.0})`` and
-threads the session transcript from each call into the next, so the debugger
-resumes the implement conversation. (Session persistence for other backends is
-in development.)
+Both backends edit the chipyard checkout through the same ``chipyard_bash`` MCP
+tool. ``prompt`` is a ``ChiaFunction`` on each backend, so the loop dispatches it
+onto the chosen worker (``llm`` for Claude Code, ``opencode`` for OpenCode).
+Claude Code additionally threads its session transcript from each call into the
+next so the debugger resumes the implement conversation; session persistence for
+OpenCode is in development (each OpenCode call is currently independent).
 
 Tunable parameters
 -------------------

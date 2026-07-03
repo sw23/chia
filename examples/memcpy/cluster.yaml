@@ -53,6 +53,13 @@ available_node_types:
                 - --ulimit nofile=65536:65536
                 - --shm-size=10.24gb
 
+    # ----- LLM backend: pick ONE -----
+    # The loop dispatches the implement/debug nodes to the backend chosen with
+    #   chia job submit -- python .../memcpy_loop.py --llm {claude,opencode}
+    # Keep BOTH nodes up and select per run with --llm, OR comment out the node
+    # for the backend you won't use (to save a container / its image pull).
+
+    # Claude Code backend (resource: llm)  — used with `--llm claude` (default).
     llm:
         resources: {"llm": 1}
         num_workers: 1
@@ -71,6 +78,20 @@ available_node_types:
                 - echo "user:x:$(id -u):$(id -g)::/home/ray:/bin/bash" >> /etc/passwd
                 # Empty working directory the Claude Code process chdirs into.
                 - mkdir -p /home/ray/llm_env
+
+    # OpenCode backend (resource: opencode_creds)  — used with `--llm opencode`.
+    opencode:
+        resources: {"opencode_creds": 1}
+        num_workers: 1
+        compatible_ips: ["${THIS_MACHINE}"]
+        worker_setup_commands: ["source ~/.bashrc"]
+        docker:
+            image: "ghcr.io/ucb-bar/chia-opencode:latest"
+            container_name: "memcpy-opencode-${USER}"
+            pull_before_run: False
+            run_options:
+                - --ulimit nofile=65536:65536
+                - --shm-size=10.24gb
 
 head_env_commands: ["source ~/.bashrc && conda activate chia_env"]
 # head_setup_commands: ["source ~/.bashrc && conda activate chia_env"]

@@ -96,13 +96,12 @@ def query_ray_cluster_nodes(config: ClusterConfig) -> list[dict] | None:
         "print('CHIA_NODES:' + json.dumps(nodes))",
         "CHIA_QUERY_EOF",
     ]
-    print(query_script)
+
     try:
         result = ssh.run_script(query_script, timeout=30, check=False)
         if result.returncode != 0:
             return None
-        print("query_ray_cluster_nodes: raw output:")
-        print(result)
+
         for line in result.stdout.strip().splitlines():
             line = line.strip()
             if line.startswith("CHIA_NODES:"):

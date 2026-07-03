@@ -396,3 +396,63 @@ def test_live_codex_simple_prompt():
     cli = llm.prompt("Reply with exactly the word: PONG", tools=[])
     assert cli.success is True
     assert "PONG" in cli.result.upper()
+
+
+# ---------------------------------------------------------------------------
+# Permission controls (live): codex's dangerously_bypass_approvals_and_sandbox
+# is mirrored onto the canonical dangerously_skip_permissions flag; codex has no
+# opencode-style `permission` block. Gated by CODEX_LIVE_TEST=1 + the binary.
+# ---------------------------------------------------------------------------
+
+
+@live
+def test_live_codex_bypass_mirrors_skip_permissions_and_runs():
+    llm = CodexLLM(
+        system_message="You answer with a single word and nothing else.",
+        timeout_seconds=180,
+        dangerously_bypass_approvals_and_sandbox=True,
+        ephemeral=True,
+    )
+    assert llm.dangerously_skip_permissions is True  # mirrored from the bypass kwarg
+    cli = llm.prompt("Reply with exactly the word: PONG", tools=[])
+    assert cli.success is True
+    assert "PONG" in cli.result.upper()
+
+
+@live
+def test_live_codex_permission_arg_warns_but_still_runs():
+    with pytest.warns(UserWarning, match="does not support a 'config'"):
+        llm = CodexLLM(
+            system_message="You answer with a single word and nothing else.",
+            timeout_seconds=180,
+            dangerously_bypass_approvals_and_sandbox=False,
+            sandbox="read-only",
+            approval_policy="never",
+            ephemeral=True,
+            config={"bash": "allow"},
+        )
+    cli = llm.prompt("Reply with exactly the word: PONG", tools=[])
+    assert cli.success is True
+    assert "PONG" in cli.result.upper()
+
+
+# ---------------------------------------------------------------------------
+# Permission controls (live_remote): dispatch onto a real codex_creds worker so
+# the bypass flag applies inside the worker container.
+# ---------------------------------------------------------------------------
+
+
+# Worker for this test: `chia up chia/models/tests/cluster/all_models.yaml`
+# (advertises codex_creds); the remote_prompt fixture skips if it's absent.
+@pytest.mark.live_remote
+def test_live_remote_codex_bypass_runs(remote_prompt):
+    llm = CodexLLM(
+        system_message="You answer with a single word and nothing else.",
+        timeout_seconds=180,
+        dangerously_bypass_approvals_and_sandbox=True,
+        ephemeral=True,
+    )
+    assert llm.dangerously_skip_permissions is True  # mirrored from the bypass kwarg
+    cli = remote_prompt(llm, "Reply with exactly the word: PONG", "codex_creds")
+    assert cli.success is True
+    assert "PONG" in cli.result.upper()

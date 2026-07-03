@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Callable, List, Optional
 import ray
 
 from chia.base.ChiaFunction import ChiaFunction
-from chia.base.llm_call import QueryResult, LLMCallBase
+from chia.base.llm_call import QueryResult, LLMCallBase, UNSET
 
 if TYPE_CHECKING:
     from chia.base.tools.ChiaTool import ChiaTool
@@ -280,8 +280,14 @@ class OpenAICompatLLM(LLMCallBase):
         max_tokens: int = 16000,
         max_tool_iterations: int = 100,
         client_kwargs: Optional[dict] = None,
+        dangerously_skip_permissions=UNSET,
+        config=UNSET,
     ):
-        super().__init__(system_message=system_message)
+        # Raw-API backend: no permission gate. Forwarded so passing either arg
+        # (directly or via a **kwargs subclass like VLLMLLM) warns it's ignored.
+        super().__init__(system_message=system_message,
+                         dangerously_skip_permissions=dangerously_skip_permissions,
+                         config=config)
         self.logging_level = logging_level
         self.logging_name = logging_name
         self.retries = retries

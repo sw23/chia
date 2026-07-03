@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING
 import ray
 
 from chia.base.ChiaFunction import ChiaFunction
-from chia.base.llm_call import QueryResult, LLMCallBase
+from chia.base.llm_call import QueryResult, LLMCallBase, UNSET
 
 if TYPE_CHECKING:
     from chia.base.tools.ChiaTool import ChiaTool
@@ -183,6 +183,9 @@ def _truncate(text: str, limit: int = 2000) -> str:
 class AntigravityLLM(LLMCallBase):
     """Wrap the Google Antigravity CLI (``agy --print``) as a Chia LLM backend."""
 
+    # Honors --dangerously-skip-permissions; has no opencode-style permission block.
+    supports_dangerously_skip_permissions = True
+
     def __init__(
         self,
         model: str | None = None,
@@ -199,8 +202,11 @@ class AntigravityLLM(LLMCallBase):
         dangerously_skip_permissions: bool = True,
         sandbox: bool = False,
         extra_cli_args: list[str] | None = None,
+        config=UNSET,
     ):
-        super().__init__(system_message=system_message)
+        super().__init__(system_message=system_message,
+                         dangerously_skip_permissions=dangerously_skip_permissions,
+                         config=config)
         self.logging_level = logging_level
         self.logging_name = logging_name
         self.retries = retries
@@ -212,7 +218,7 @@ class AntigravityLLM(LLMCallBase):
         # Where agy reads its config; MCP servers live in
         # <gemini_dir>/config/mcp_config.json. Defaults to the standard location.
         self.gemini_dir = gemini_dir or os.path.join(os.path.expanduser("~"), ".gemini")
-        self.dangerously_skip_permissions = dangerously_skip_permissions
+        # self.dangerously_skip_permissions is set by LLMCallBase.__init__.
         self.sandbox = sandbox
         self.extra_cli_args = extra_cli_args or []
         self.logger = logging.getLogger(logging_name)

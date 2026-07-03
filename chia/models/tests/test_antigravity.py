@@ -218,3 +218,55 @@ def test_live_antigravity_simple_prompt():
     cli = llm.prompt("Reply with exactly the word: PONG", tools=[])
     assert cli.success is True
     assert "PONG" in cli.result.upper()
+
+
+# ---------------------------------------------------------------------------
+# Permission controls (live): agy honors --dangerously-skip-permissions; it has
+# no opencode-style `permission` block. Gated by ANTIGRAVITY_LIVE_TEST=1 + agy.
+# ---------------------------------------------------------------------------
+
+
+@live
+def test_live_antigravity_skip_permissions_runs_prompt():
+    llm = AntigravityLLM(
+        system_message="You answer with a single word and nothing else.",
+        timeout_seconds=180,
+        dangerously_skip_permissions=True,
+    )
+    assert llm.dangerously_skip_permissions is True
+    cli = llm.prompt("Reply with exactly the word: PONG", tools=[])
+    assert cli.success is True
+    assert "PONG" in cli.result.upper()
+
+
+@live
+def test_live_antigravity_permission_arg_warns_but_still_runs():
+    with pytest.warns(UserWarning, match="does not support a 'config'"):
+        llm = AntigravityLLM(
+            system_message="You answer with a single word and nothing else.",
+            timeout_seconds=180,
+            config={"x": "y"},
+        )
+    cli = llm.prompt("Reply with exactly the word: PONG", tools=[])
+    assert cli.success is True
+    assert "PONG" in cli.result.upper()
+
+
+# ---------------------------------------------------------------------------
+# Permission controls (live_remote): dispatch onto a real antigravity_creds
+# worker so --dangerously-skip-permissions applies inside the worker container.
+# ---------------------------------------------------------------------------
+
+
+# Worker for this test: `chia up chia/models/tests/cluster/all_models.yaml`
+# (advertises antigravity_creds); the remote_prompt fixture skips if it's absent.
+@pytest.mark.live_remote
+def test_live_remote_antigravity_skip_permissions(remote_prompt):
+    llm = AntigravityLLM(
+        system_message="You answer with a single word and nothing else.",
+        timeout_seconds=180,
+        dangerously_skip_permissions=True,
+    )
+    cli = remote_prompt(llm, "Reply with exactly the word: PONG", "antigravity_creds")
+    assert cli.success is True
+    assert "PONG" in cli.result.upper()
