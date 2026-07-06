@@ -1,0 +1,19 @@
+# Public tool declarations for the sky130 Joules power-estimation flow.
+# Site-specific install paths + licenses live in tools-priv.yml;
+# sky130 PDK collateral lives in tech-sky130.yml.
+
+vlsi.core.build_system: make
+
+# --- Synthesis: Cadence Genus (produces the gate-level netlist) ---
+vlsi.core.synthesis_tool: "hammer.synthesis.genus"
+synthesis.genus.version: "211"
+
+# --- Power: Cadence Joules ---
+vlsi.core.power_tool: "hammer.power.joules"
+power.joules.version: "211"
+
+# RTL-level power: Joules maps the RTL to gates internally against the sky130
+# liberty (from tech-sky130.yml), so no P&R database or SPEF is required. The
+# per-run inputs (top_module, input_files, the Verilator VCD waveforms, and
+# tb_name/tb_dut) are shipped by powerloop.py at runtime via config_contents.
+power.inputs.level: "rtl"

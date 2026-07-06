@@ -17,6 +17,11 @@ from chia.base.ChiaFunction import ChiaFunction
 # WithSelectiveWaveform(maxWindows=64) cap).
 _MAX_WAVE_WINDOWS = 64
 
+# Sibling of the per-task dirs under work_dir where run(keep_waveform=True)
+# parks VCDs for later collect_waveform() pickup. Also the confinement root
+# for read_waveform_chunk / remove_waveform.
+_WAVEFORMS_SUBDIR = "waveforms"
+
 class VerilatorRunNode:
     """Runs one test ELF on a prebuilt chipyard Verilator simulator.
     """
@@ -188,6 +193,7 @@ class VerilatorRunNode:
         aws_secret_access_key: str = "",
         aws_session_token: str = "",
         aws_region: str = "",
+        keep_waveform: bool = False,
     ) -> RunResult:
         """Run the simulator and pipe stderr through spike-dasm.
 
@@ -259,6 +265,32 @@ class VerilatorRunNode:
             out_s3_path, _ = self._upload_file_to_s3(out_path, s3_path, **aws_kwargs)
             log_s3_path, _ = self._upload_file_to_s3(log_path, s3_path, **aws_kwargs)
 
+        # Keep the VCD on this worker's disk for later collect_waveform()
+        # pickup (the S3-free transfer path). Moved OUT of the task dir so
+        # cleanup_task_dir below doesn't take it; a uuid prefix keeps
+        # concurrent runs of the same test from colliding. The claim ticket
+        # (path + this ray node's id) travels back in the RunResult.
+        vcd_kept_path = ""
+        vcd_node_id = ""
+        if keep_waveform:
+            vcd_local = os.path.join(self._task_dir, f"{basename}.vcd")
+            if os.path.isfile(vcd_local):
+                import ray
+                keep_dir = os.path.join(
+                    os.path.dirname(self._task_dir), _WAVEFORMS_SUBDIR)
+                os.makedirs(keep_dir, exist_ok=True)
+                vcd_kept_path = os.path.join(
+                    keep_dir, f"{uuid.uuid4().hex[:8]}-{basename}.vcd")
+                shutil.move(vcd_local, vcd_kept_path)
+                vcd_node_id = ray.get_runtime_context().get_node_id()
+                vcd_size_bytes = os.path.getsize(vcd_kept_path)
+                self.logger.info(
+                    f"Kept waveform at {vcd_kept_path} ({vcd_size_bytes} bytes)")
+            else:
+                self.logger.warning(
+                    f"keep_waveform set but no VCD at {vcd_local} "
+                    f"(was capture_waveform on and did the sim start?)")
+
         result = RunResult(
             test_binary_name=test_binary_name,
             log= (lambda: open(log_path, "r", errors="replace").read())(),
@@ -267,6 +299,8 @@ class VerilatorRunNode:
             success=sim_proc.returncode == 0,
             vcd_s3_path=vcd_s3_path,
             vcd_size_bytes=vcd_size_bytes,
+            vcd_path=vcd_kept_path,
+            vcd_node_id=vcd_node_id,
             out_s3_path=out_s3_path,
             log_s3_path=log_s3_path,
             wave_windows=list(wave_windows),
@@ -312,6 +346,7 @@ class VerilatorRunNode:
         aws_secret_access_key: str = "",
         aws_session_token: str = "",
         aws_region: str = "",
+        keep_waveform: bool = False,
     ) -> RunResult:
         """Run one test ELF on the prebuilt Chipyard Verilator simulator.
 
@@ -379,12 +414,20 @@ class VerilatorRunNode:
             aws_session_token: Optional session token for temporary
                 (STS) credentials; only used when explicit keys are given.
             aws_region: Optional AWS region name for the S3 client.
+            keep_waveform: If True, keep the produced ``.vcd`` on this worker's
+                disk (moved to ``<work_dir>/waveforms/``, surviving
+                ``cleanup_task_dir``) and record its path + this worker's ray
+                node id in the RunResult — the claim ticket for
+                :func:`collect_waveform`, the S3-free transfer path.
+                Auto-enables ``capture_waveform``. Independent of
+                ``upload_to_s3`` (both may be set).
 
         Returns:
             RunResult: Captured ``log`` (simulator stdout) and ``out``
             (spike-dasm disassembly of stderr), the process returncode/success,
-            any S3 URIs for uploaded artifacts, and an echo of the configured
-            ``wave_windows``.
+            any S3 URIs for uploaded artifacts, the kept-waveform claim ticket
+            (``vcd_path``/``vcd_node_id``, when ``keep_waveform``), and an echo
+            of the configured ``wave_windows``.
         """
         profiler = get_profiler()
         profiler.add_info({"test_binary": test_binary_name})
@@ -405,13 +448,14 @@ class VerilatorRunNode:
                     "(require pc>0, n>=1, cyc>0)"
                 )
 
-        # If the caller asked for windows or a full-trace bypass, they need a
-        # destination — auto-enable VCD output. Without this the windows fire
-        # but no +vcdfile= plusarg is set so nothing reaches disk.
-        if (wave_windows or dump_all_waveform) and not capture_waveform:
+        # If the caller asked for windows, a full-trace bypass, or a kept
+        # waveform, they need a destination — auto-enable VCD output. Without
+        # this the windows fire but no +vcdfile= plusarg is set so nothing
+        # reaches disk.
+        if (wave_windows or dump_all_waveform or keep_waveform) and not capture_waveform:
             self.logger.info(
-                "wave_windows/dump_all_waveform requested without capture_waveform; "
-                "auto-enabling VCD output"
+                "wave_windows/dump_all_waveform/keep_waveform requested without "
+                "capture_waveform; auto-enabling VCD output"
             )
             capture_waveform = True
 
@@ -461,6 +505,7 @@ class VerilatorRunNode:
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
             aws_region=aws_region,
+            keep_waveform=keep_waveform,
         )
 
     def run_metasim(
@@ -507,3 +552,120 @@ class VerilatorRunNode:
             argv = get_numa_prefix().split() + argv
 
         return self._execute(argv, test_binary_name, test_binary_path, timeout_seconds, cleanup_task_dir=cleanup_task_dir)
+
+
+# ---------------------------------------------------------------------------
+# Kept-waveform collection — the S3-free transfer path
+# ---------------------------------------------------------------------------
+#
+# run(keep_waveform=True) parks the VCD under <work_dir>/waveforms/ on the
+# worker and returns a claim ticket (RunResult.vcd_path + .vcd_node_id).
+# collect_waveform() redeems it from any machine in the cluster by driving
+# read_waveform_chunk tasks pinned to that node — the same chunked-streaming
+# shape as HammerNode.read_chunk / collect_fs, with node-affinity scheduling
+# (as in chia.trace.profiler) instead of a placement group.
+#
+# The chunk/remove tasks request a tiny fractional "verilator_run" slot so
+# they land on verilator workers without competing with sims for whole slots.
+
+
+def _check_waveform_path(path: str) -> str:
+    """Confine *path* to a ``waveforms/`` dir (the keep_waveform park)."""
+    path = os.path.abspath(path)
+    if os.path.basename(os.path.dirname(path)) != _WAVEFORMS_SUBDIR:
+        raise ValueError(
+            f"{path!r} is not under a {_WAVEFORMS_SUBDIR}/ dir; only kept "
+            f"waveforms may be read/removed remotely")
+    return path
+
+
+@ChiaFunction(resources={"verilator_run": 0.01})
+def read_waveform_chunk(path: str, offset: int, length: int) -> bytes:
+    """Read ``length`` bytes at ``offset`` from a kept waveform on this worker.
+
+    The transfer primitive behind :func:`collect_waveform`; returns ``b""`` at
+    or past EOF. Dispatch pinned (node affinity) to the node in the claim
+    ticket — an unpinned call may land on a worker without the file.
+    """
+    with open(_check_waveform_path(path), "rb") as f:
+        f.seek(offset)
+        return f.read(length)
+
+
+@ChiaFunction(resources={"verilator_run": 0.01})
+def remove_waveform(path: str) -> bool:
+    """Delete a kept waveform on this worker; False if already gone.
+
+    Idempotent — safe to call from best-effort cleanup sweeps.
+    """
+    try:
+        os.remove(_check_waveform_path(path))
+        return True
+    except OSError:
+        return False
+
+
+def collect_waveform(
+    dest_path: str,
+    run_result: RunResult,
+    chunk_bytes: int = 64 * 1024 * 1024,
+    remove_source: bool = False,
+) -> int:
+    """Stream a kept waveform from its verilator worker to THIS machine's disk.
+
+    Caller-side orchestrator, not a ChiaFunction (mirrors
+    ``HammerNode.collect_fs``): it runs wherever you call it — another worker
+    (e.g. the power node) or the driver — writes ``dest_path`` on that
+    machine's filesystem, and pulls bytes via :func:`read_waveform_chunk`
+    tasks pinned to the node recorded in *run_result*. Peak memory is
+    ~``chunk_bytes``, not the file size; transfers are peer-to-peer through
+    the object store.
+
+    Args:
+        dest_path: Where to write on the calling machine (parent dirs are
+            created).
+        run_result: A :class:`RunResult` from ``run(keep_waveform=True)`` —
+            its ``vcd_path``/``vcd_node_id`` are the claim ticket.
+        chunk_bytes: Transfer chunk size.
+        remove_source: If True, delete the worker-side VCD after a complete,
+            size-verified copy.
+
+    Returns:
+        Bytes written to ``dest_path``.
+
+    Raises:
+        ValueError: *run_result* carries no claim ticket.
+        RuntimeError: the copied size disagrees with the size recorded at
+            keep time (truncated/clobbered source).
+    """
+    from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
+    from chia.base.ChiaFunction import get
+
+    if not (run_result.vcd_path and run_result.vcd_node_id):
+        raise ValueError(
+            f"RunResult for {run_result.test_binary_name!r} has no kept "
+            f"waveform — was the run dispatched with keep_waveform=True?")
+    pin = {"scheduling_strategy": NodeAffinitySchedulingStrategy(
+        node_id=run_result.vcd_node_id, soft=False)}
+
+    dest_path = os.path.abspath(dest_path)
+    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    written = 0
+    with open(dest_path, "wb") as out:
+        while True:
+            chunk = get(read_waveform_chunk.options(**pin).chia_remote(
+                run_result.vcd_path, written, chunk_bytes))
+            if not chunk:
+                break
+            out.write(chunk)
+            written += len(chunk)
+
+    if run_result.vcd_size_bytes and written != run_result.vcd_size_bytes:
+        raise RuntimeError(
+            f"collected {written} bytes of {run_result.vcd_path} but "
+            f"{run_result.vcd_size_bytes} were recorded at keep time — "
+            f"source truncated or clobbered?")
+
+    if remove_source:
+        get(remove_waveform.options(**pin).chia_remote(run_result.vcd_path))
+    return written

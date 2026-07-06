@@ -1,0 +1,80 @@
+
+cluster_name: hammer_power
+
+available_node_types:
+    verilator_run:
+        resources: {"verilator_run": 32}
+        min_workers: 2
+        max_workers: 2
+        docker:
+            image: "ghcr.io/ucb-bar/chia-verilator-run:latest"
+            container_name: "chia-verilator-run-${USER}"
+            pull_before_run: True
+            run_options:
+                - --ulimit nofile=65536:65536
+                - --shm-size=10.24gb
+        compatible_ips: ["${VERILATOR_IP_1}", "${VERILATOR_IP_2}"]
+
+    chisel_build:
+        resources: {"chipyard": 1}
+        min_workers: 1
+        max_workers: 1
+        worker_setup_commands: ["cd /home/ray/chipyard/sims/firesim && source sourceme-manager.sh"]
+        docker:
+            image: "ghcr.io/ucb-bar/chia-chisel-build:latest"
+            container_name: "chia-chisel-build-${USER}"
+            run_options:
+                - --ulimit nofile=65536:65536
+                - --shm-size=10.24gb
+                - "-v $SSH_AUTH_SOCK:/ssh-agent"
+                - "-e SSH_AUTH_SOCK=/ssh-agent"
+            run_setup_commands:
+                - cd /home/ray/chipyard
+                - git -c submodule.recurse=false pull || true
+                - git submodule update --init generators/ || true
+            pull_timeout: 3600
+        compatible_ips: ["${BUILD_IP}"]
+
+    vlsi:
+        resources: {"VLSI": 4, "joules": 1}
+        num_workers: 1
+        compatible_ips: ["${VLSI_IP}"]
+        worker_env_commands: ["source ~/.bashrc && conda activate chia_env"]
+
+    cacti:
+        resources: {"cacti": 4}
+        num_workers: 1
+        compatible_ips: ["${HEAD_IP}"]
+        docker:
+            image: "ghcr.io/ucb-bar/chia-cacti:latest"
+            container_name: "chia-cacti-${USER}"
+            run_options:
+                - --ulimit nofile=65536:65536
+                - --shm-size=10.24gb
+                - "-v $SSH_AUTH_SOCK:/ssh-agent"
+                - "-e SSH_AUTH_SOCK=/ssh-agent"
+            run_setup_commands:
+                - cd /home/ray/chipyard
+                - git -c submodule.recurse=false pull || true
+                - git submodule update --init generators/ || true
+
+auth:
+    ssh_user: ${USER}
+    # ssh_private_key: /path/to/private/key
+
+provider:
+    head_ip: ${HEAD_IP}
+
+head_setup_commands:
+    - "source ~/.bashrc && conda activate pwr_loop"
+
+head_teardown_commands: []
+worker_setup_commands: []
+
+head_start_ray_commands:
+    - "source ~/.bashrc && conda activate pwr_loop && ray stop"
+    - "source ~/.bashrc && conda activate pwr_loop && ulimit -c unlimited && ray start --head --port=6379 --include-dashboard=True --dashboard-agent-listen-port=0"
+
+worker_start_ray_commands:
+    - ray stop
+    - ray start --address=$RAY_HEAD_IP:6379 --dashboard-agent-listen-port=0

@@ -143,7 +143,14 @@ class RunResult:
         vcd_s3_path: Full ``s3://…`` URI of the uploaded VCD; ``""`` when no
             waveform was captured or no upload occurred (the VCD is too large
             to return inline).
-        vcd_size_bytes: Local VCD size at upload time; ``0`` when no upload.
+        vcd_size_bytes: Size of the uploaded/kept VCD; ``0`` when neither.
+        vcd_path: Worker-side path of the kept VCD (``run(keep_waveform=True)``
+            moves it out of the task dir so it survives cleanup). Together with
+            ``vcd_node_id`` this is the claim ticket for
+            :func:`chia.chipyard.verilator_run_node.collect_waveform`, the
+            S3-free transfer path. ``""`` when not kept.
+        vcd_node_id: Ray node id (hex) of the worker holding ``vcd_path``;
+            collection tasks are pinned to it. ``""`` when not kept.
         out_s3_path: ``s3://…`` URI of the uploaded ``.out``; ``""`` when not
             uploaded.
         log_s3_path: ``s3://…`` URI of the uploaded ``.log``; ``""`` when not
@@ -157,9 +164,12 @@ class RunResult:
     returncode: int
     success: bool
     # Waveform capture (only populated when the run was configured to capture
-    # a VCD; the file itself is uploaded to S3: too large to return inline).
+    # a VCD; the file itself is uploaded to S3 or kept on the worker for
+    # collect_waveform(): too large to return inline).
     vcd_s3_path: str = ""                                          # full s3://… URI; "" when not uploaded
-    vcd_size_bytes: int = 0                                        # local VCD size at upload time (0 when no upload)
+    vcd_size_bytes: int = 0                                        # uploaded/kept VCD size (0 when neither)
+    vcd_path: str = ""                                             # kept VCD's worker-side path; "" when not kept
+    vcd_node_id: str = ""                                          # ray node id (hex) holding vcd_path; "" when not kept
     # Stdout/stderr S3 mirrors (populated when run was launched with
     # upload_to_s3=True; "" when no upload).
     out_s3_path: str = ""
