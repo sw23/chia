@@ -1,0 +1,7 @@
+
+# Cadence install root + license
+cadence.cadence_home: 
+cadence.CDS_LIC_FILE: 
+
+# Explicit tool binaries (this worker's install layout)
+power.joules.joules_bin:
