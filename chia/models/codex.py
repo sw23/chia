@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 import ray
 
 from chia.base.ChiaFunction import ChiaFunction, ObjectRefCallback
-from chia.base.llm_call import QueryResult, LLMCallBase
+from chia.base.llm_call import QueryResult, LLMCallBase, UNSET
 
 if TYPE_CHECKING:
     from chia.base.tools.ChiaTool import ChiaTool
@@ -297,6 +297,10 @@ def _payload(event: dict) -> dict:
 class CodexLLM(LLMCallBase):
     """Wrap ``codex exec`` as a Chia LLM backend."""
 
+    # Honors --dangerously-bypass-approvals-and-sandbox (via its own kwarg);
+    # has no opencode-style permission block.
+    supports_dangerously_skip_permissions = True
+
     def __init__(
         self,
         model: str | None = None,
@@ -319,8 +323,13 @@ class CodexLLM(LLMCallBase):
         reasoning_effort: str | None = None,
         resume_session: bool = False,
         auto_compact_token_limit: int | None = 200_000,
+        config=UNSET,
     ):
-        super().__init__(system_message=system_message)
+        # codex's bypass also disables the sandbox, so it keeps its own
+        # (more specific) kwarg; mirror it onto the canonical base flag.
+        super().__init__(system_message=system_message,
+                         dangerously_skip_permissions=dangerously_bypass_approvals_and_sandbox,
+                         config=config)
         self.logging_level = logging_level
         self.logging_name = logging_name
         self.retries = retries

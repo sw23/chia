@@ -958,3 +958,68 @@ def test_session_resume_across_machines_cluster(capsys):
         assert hostname in cli2.result, (
             f"resumed model did not recall hostname {hostname!r}: {cli2.result!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Permission controls (live CLI): the claude CLI honors
+# --dangerously-skip-permissions; it does NOT support the canonical `permission`
+# block (claude's permissions live in a separate settings.json interface).
+# Gated on the claude binary + an explicit opt-in env (the CLI can hang on
+# first launch if its settings haven't accepted the bypass disclaimer).
+# ---------------------------------------------------------------------------
+import shutil  # noqa: E402
+
+cli_live = pytest.mark.skipif(
+    os.environ.get("CLAUDE_CLI_LIVE_TEST") != "1" or not shutil.which("claude"),
+    reason="set CLAUDE_CLI_LIVE_TEST=1 and have the claude CLI authenticated to run live",
+)
+
+
+@cli_live
+def test_live_cli_dangerously_skip_permissions_runs_prompt():
+    llm = ClaudeCodeLLM(
+        backend="cli",
+        model=CHEAP_MODEL,
+        system_message="You answer with a single word and nothing else.",
+        dangerously_skip_permissions=True,
+    )
+    assert llm.dangerously_skip_permissions is True
+    cli = llm.prompt("Reply with exactly the word: PONG", tools=[])
+    assert cli.success is True
+    assert "PONG" in cli.result.upper()
+
+
+@cli_live
+def test_live_cli_permission_arg_warns_but_still_runs():
+    with pytest.warns(UserWarning, match="does not support a 'config'"):
+        llm = ClaudeCodeLLM(
+            backend="cli",
+            model=CHEAP_MODEL,
+            system_message="You answer with a single word and nothing else.",
+            config={"bash": "allow"},
+        )
+    cli = llm.prompt("Reply with exactly the word: PONG", tools=[])
+    assert cli.success is True
+    assert "PONG" in cli.result.upper()
+
+
+# ---------------------------------------------------------------------------
+# Permission controls (live_remote): dispatch the CLI backend onto a real
+# claude_creds worker via .chia_remote so --dangerously-skip-permissions runs
+# inside the worker container. See conftest.py + cluster/all_models.yaml.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.live_remote
+def test_live_remote_cli_dangerously_skip_permissions(remote_prompt):
+    llm = ClaudeCodeLLM(
+        backend="cli",
+        model=CHEAP_MODEL,
+        resume_session=False,
+        system_message="You answer with a single word and nothing else.",
+        dangerously_skip_permissions=True,
+        timeout_seconds=600,
+    )
+    cli = remote_prompt(llm, "Reply with exactly the word: PONG", "claude_creds")
+    assert cli.success, cli.stderr
+    assert "PONG" in cli.result.upper()

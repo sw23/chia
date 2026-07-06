@@ -310,6 +310,10 @@ class OpenCodeLLM(LLMCallBase):
     other backends; ``returncode`` is the ``run`` exit code.
     """
 
+    # Honors both --dangerously-skip-permissions and a `permission` config block.
+    supports_dangerously_skip_permissions = True
+    supports_config = True
+
     def __init__(
         self,
         model: Optional[str] = None,
@@ -324,8 +328,12 @@ class OpenCodeLLM(LLMCallBase):
         work_dir: Optional[str] = None,
         extra_cli_args: Optional[List[str]] = None,
         additional_providers: Optional[List[AdditionalModelProvider]] = None,
+        dangerously_skip_permissions: bool = True,
+        config: Optional[dict] = None,
     ):
-        super().__init__(system_message=system_message)
+        super().__init__(system_message=system_message,
+                         dangerously_skip_permissions=dangerously_skip_permissions,
+                         config=config)
         self.logging_level = logging_level
         self.logging_name = logging_name
         self.retries = retries
@@ -579,6 +587,17 @@ class OpenCodeLLM(LLMCallBase):
                     "enabled": True,
                 }
             cfg["mcp"] = mcp
+
+        # Config block. Defaults to allowing all tools — notably
+        # external_directory, whose "ask" default blocks a non-interactive run
+        # (the --dangerously-skip-permissions flag does NOT cover it).
+        # Override via the `permission` kwarg.
+        cfg["permission"] = self.config if self.config is not None else {
+            "edit": "allow",
+            "bash": "allow",
+            "webfetch": "allow",
+            "external_directory": "allow",
+        }
         if self.additional_providers:
             provider_cfg: dict = cfg.setdefault("provider", {})
             for provider in self.additional_providers:
@@ -592,8 +611,9 @@ class OpenCodeLLM(LLMCallBase):
             "run",
             "--format", "json",
             "--agent", self.agent_name,
-            "--dangerously-skip-permissions",
         ]
+        if self.dangerously_skip_permissions:
+            cmd.append("--dangerously-skip-permissions")
         if self.model:  # omit --model so opencode uses its configured default
             cmd += ["--model", self.model]
         if self.work_dir:

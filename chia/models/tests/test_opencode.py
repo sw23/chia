@@ -222,6 +222,27 @@ def test_build_config_mcp_servers():
     }
 
 
+def test_build_config_default_permission_keeps_builtins_even_with_mcp_tools():
+    """opencode does NOT auto-restrict to MCP-only: built-ins stay usable by
+    default even when MCP tools are attached. Restricting to MCP-only is the
+    caller's choice (via the `permission` kwarg), not baked into the backend."""
+    tool = SimpleNamespace(name="chipyard_bash", hostname="localhost", port=9001)
+    cfg = OpenCodeLLM()._build_config([tool])
+    assert cfg["mcp"]["chipyard_bash"]["type"] == "remote"
+    assert cfg["permission"].get("bash") == "allow"
+    assert "*" not in cfg["permission"]
+
+
+def test_build_config_permission_kwarg_can_restrict_to_mcp_only():
+    """A caller can restrict opencode to only its MCP tools via the permission
+    kwarg — deny all built-ins, allow just the MCP server (as the memcpy
+    example does so opencode edits the chipyard container, not its own FS)."""
+    tool = SimpleNamespace(name="chipyard_bash", hostname="localhost", port=9001)
+    perm = {"*": "deny", "chipyard_bash_*": "allow"}
+    cfg = OpenCodeLLM(config=perm)._build_config([tool])
+    assert cfg["permission"] == perm
+
+
 def test_build_run_cmd_flags():
     llm = OpenCodeLLM(model="anthropic/claude-sonnet-4-6", work_dir="/tmp/x")
     cmd = llm._build_run_cmd("hello world")
@@ -997,3 +1018,69 @@ def test_live_opencode_stream_log_tool_conversation(local_bash_tool, tmp_path):
     assert "CHIA_TOOL_OK" in stream[result_idx:], (
         "tool-result section missing the echoed sentinel\n" + stream
     )
+
+
+# ---------------------------------------------------------------------------
+# Permission controls (live): opencode honors --dangerously-skip-permissions
+# AND a `permission` config block. These need the opencode binary + auth.
+# ---------------------------------------------------------------------------
+
+
+@live
+def test_live_opencode_skip_permissions_runs_prompt(tmp_path):
+    """--dangerously-skip-permissions + the default allow-all permission block
+    let opencode complete a prompt non-interactively."""
+    llm = OpenCodeLLM(
+        model=_OC_TEST_MODEL,
+        opencode_bin=_OC_BIN,
+        system_message="You answer with a single word and nothing else.",
+        work_dir=str(tmp_path),
+        dangerously_skip_permissions=True,
+    )
+    assert llm.dangerously_skip_permissions is True
+    cli = llm.prompt("Reply with exactly: PONG", tools=[])
+    assert cli.success is True
+    assert "PONG" in cli.result.upper()
+
+
+@live
+def test_live_opencode_permission_block_allows_tool_use(tmp_path):
+    """The allow-all `permission` block lets opencode's built-in shell tool run
+    without an interactive prompt (otherwise the bash/external_directory gate
+    blocks and a non-interactive run hangs)."""
+    llm = OpenCodeLLM(
+        model=_OC_TEST_MODEL,
+        opencode_bin=_OC_BIN,
+        system_message=(
+            "Use your shell tool to run the command the user gives you, then "
+            "reply with only its stdout."
+        ),
+        work_dir=str(tmp_path),
+        config={"edit": "allow", "bash": "allow",
+                    "webfetch": "allow", "external_directory": "allow"},
+    )
+    cli = llm.prompt("Run this command and report its output: echo PONG", tools=[])
+    assert cli.success is True
+    assert "PONG" in cli.result.upper()
+
+
+# ---------------------------------------------------------------------------
+# Permission controls (live_remote): dispatch onto a real opencode_creds worker
+# so the flag + permission block apply inside the worker container.
+# ---------------------------------------------------------------------------
+
+
+# Worker for this test: `chia up chia/models/tests/cluster/all_models.yaml`
+# (advertises opencode_creds); the remote_prompt fixture skips if it's absent.
+@pytest.mark.live_remote
+def test_live_remote_opencode_skip_permissions_and_block(remote_prompt):
+    llm = OpenCodeLLM(
+        model=_OC_TEST_MODEL,
+        system_message="You answer with a single word and nothing else.",
+        dangerously_skip_permissions=True,
+        config={"edit": "allow", "bash": "allow",
+                    "webfetch": "allow", "external_directory": "allow"},
+    )
+    cli = remote_prompt(llm, "Reply with exactly: PONG", "opencode_creds")
+    assert cli.success is True
+    assert "PONG" in cli.result.upper()

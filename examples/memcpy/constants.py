@@ -99,6 +99,11 @@ LLM_TIMEOUT_SECONDS = int(os.environ.get("MEMCPY_LLM_TIMEOUT_SECONDS", "1800"))
 # Forwarded to the claude CLI; "max" effort matches the other examples' debugger.
 LLM_EXTRA_CLI_ARGS = ["--effort", "max"]
 
+# OpenCode backend (selected with `--llm opencode`; dispatched onto the opencode
+# node, resource opencode_creds). Model is opencode's `provider/model` form;
+# leave empty to use opencode's own configured default.
+OPENCODE_MODEL = os.environ.get("MEMCPY_OPENCODE_MODEL", "") or None
+
 # ---------------------------------------------------------------------------
 # Loop control
 # ---------------------------------------------------------------------------
@@ -150,10 +155,9 @@ TEST_BUILD_RESOURCE = float(os.environ.get("MEMCPY_TEST_BUILD_RESOURCE", "0.05")
 CHISEL_BUILD_RESOURCE = float(os.environ.get("MEMCPY_CHISEL_BUILD_RESOURCE", "0.9"))
 VERILATOR_RUN_RESOURCE = float(os.environ.get("MEMCPY_VERILATOR_RUN_RESOURCE", "1.0"))
 
-# The implement + debug LLM calls are dispatched onto the dedicated claude
-# ("llm") node, which advertises {"llm": 1} (see cluster.yaml). The claude CLI
-# + credentials live in that node's image; the head only orchestrates.
+# The implement + debug LLM calls are dispatched onto the dedicated claude or opencode nodes
 LLM_RESOURCE = float(os.environ.get("MEMCPY_LLM_RESOURCE", "1.0"))
+OPENCODE_RESOURCE = float(os.environ.get("MEMCPY_OPENCODE_RESOURCE", "1.0"))
 
 # ---------------------------------------------------------------------------
 # Chisel diff capture

@@ -41,10 +41,10 @@ test build  (parallel)        implement  (parallel)
 |------|------|
 | `memcpy_loop.py` | Main orchestration: parallel test-build + implement, then the build→run→debug loop. Dumps all collateral to `out/`. |
 | `test_build.py` | `build_test` ChiaFunction — copies `memcpy.c` into `$chipyard/tests`, registers a CMake target, builds `build/memcpy.riscv` + `build/memcpy.dump`, reads them back. Runs on the chipyard container. |
-| `claude.py` | The implement + debug LLM nodes (`chia.models.claude.ClaudeCodeLLM`), correctness classification, and failure-feedback formatting. The LLM calls are dispatched onto the dedicated `llm` (claude) node, sharing one session (transcript threaded across calls). |
+| `llm.py` | The implement + debug LLM nodes (Claude Code or OpenCode), correctness classification, and failure-feedback formatting. The LLM calls are dispatched onto the chosen LLM node (claude `llm` or opencode `opencode_creds`). Claude shares one resumable session across implement + debug (transcript threaded across calls); session persistence for other backends is in development. |
 | `prompts/` | The implement (`implement.md`) and debug (`debug.md`) prompt text, with `${VAR}` placeholders substituted from `constants` at load time. |
 | `constants.py` | Every tunable knob (loop counts, configs, paths, timeouts, resource tokens). |
-| `cluster.yaml` | Minimal single-machine cluster: one chisel-build, one verilator, one claude (`llm`) node, all on `${THIS_MACHINE}`. |
+| `cluster.yaml` | Minimal single-machine cluster: one chisel-build, one verilator, and an LLM node — a claude (`llm`) **and/or** opencode (`opencode_creds`) node (pick one, or keep both and select per run), all on `${THIS_MACHINE}`. |
 | `memcpy.c` | The bare-metal test: issues two RoCC custom instructions and checks the copy. |
 | `out/` | Per-run dump of node results + collateral (git-ignored). |
 
@@ -139,3 +139,25 @@ resolve. Do **not** pass `--working-dir`: the loop's `RUNTIME_ENV` already sets
 `py_modules` (the head's current `chia`); passing `--working-dir` too makes Ray
 fail to merge the two runtime envs. The driver runs on the cluster head, where
 the repo lives, so `out/` is written into the real `examples/memcpy/out`.
+
+### Choosing the LLM backend
+
+The implement/debug nodes can run on **Claude Code** or **OpenCode**, selected
+per run with `--llm`:
+
+```bash
+chia job submit -- python "$(pwd)/examples/memcpy/memcpy_loop.py" --llm claude    # default
+chia job submit -- python "$(pwd)/examples/memcpy/memcpy_loop.py" --llm opencode
+```
+
+`cluster.yaml` defines both an `llm` (Claude Code) node and an `opencode`
+(OpenCode) node — keep both up and pick per run with `--llm`, or comment out the
+one you won't use. The chosen backend's node must be running, or the dispatch
+will block waiting for its resource (`llm` / `opencode_creds`). Both backends
+edit the chipyard checkout through the same `chipyard_bash` MCP tool (for
+OpenCode its built-in file tools are disabled via a `permission` block, so edits
+land on the chipyard container and not the opencode worker's own filesystem).
+Claude shares one resumable session across implement + debug; session
+persistence for OpenCode is in development (each opencode call is currently
+independent, with the full failure context re-supplied inline to every debug
+call).

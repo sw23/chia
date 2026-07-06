@@ -15,7 +15,7 @@ from uuid import uuid4
 import ray
 
 from chia.base.ChiaFunction import ChiaFunction, ObjectRefCallback
-from chia.base.llm_call import QueryResult, LLMCallBase
+from chia.base.llm_call import QueryResult, LLMCallBase, UNSET
 
 if TYPE_CHECKING:
     from chia.base.tools.ChiaTool import ChiaTool
@@ -342,6 +342,12 @@ class ClaudeCodeLLM(LLMCallBase):
     optionally connect to MCP tool servers (e.g. :class:`BashTool`).
     """
 
+    # Honors --dangerously-skip-permissions. Does NOT support the canonical
+    # `permission` block: claude's permissions live in a different interface
+    # (settings.json `permissions` + --permission-mode), not a simple dict, so
+    # it's left out for now rather than shoehorned in.
+    supports_dangerously_skip_permissions = True
+
     def __init__(
         self,
         model: str = "claude-sonnet-4-6",
@@ -361,8 +367,12 @@ class ClaudeCodeLLM(LLMCallBase):
         max_tokens: int = 16000,
         thinking: Optional[str] = "adaptive",
         max_tool_iterations: int = 100,
+        dangerously_skip_permissions: bool = True,
+        config=UNSET,
     ):
-        super().__init__(system_message=system_message)
+        super().__init__(system_message=system_message,
+                         dangerously_skip_permissions=dangerously_skip_permissions,
+                         config=config)
         self.logging_level = logging_level
         self.logging_name = logging_name
         self.retries = retries
@@ -562,9 +572,17 @@ class ClaudeCodeLLM(LLMCallBase):
         ``resume_session`` is False. Returns *cli* (so it's a pass-through
         callback).
         """
-        if self._session_id is not None and cli.session_transcript is not None:
-            self._session_transcript = cli.session_transcript
-            self._session_transcript_path = cli.session_transcript_path
+        if self._session_id is not None:
+            # Advance the driver-side call counter so the NEXT dispatch of this
+            # instance resumes the session (``--resume``) instead of recreating
+            # it (``--session-id``). ``prompt`` increments the counter on the
+            # worker's pickled copy, which is discarded; mirror it here on
+            # ``get()`` so a reused instance threads the session across calls
+            # with no manual bookkeeping by the caller.
+            self._call_counter += 1
+            if cli.session_transcript is not None:
+                self._session_transcript = cli.session_transcript
+                self._session_transcript_path = cli.session_transcript_path
         return cli
 
     def _get_node_id(self) -> str:
@@ -761,8 +779,9 @@ class ClaudeCodeLLM(LLMCallBase):
             "claude",
             "--print",
             "--model", self.model,
-            "--dangerously-skip-permissions",
         ]
+        if self.dangerously_skip_permissions:
+            cmd.append("--dangerously-skip-permissions")
 
         if self.extra_cli_args:
             cmd += self.extra_cli_args

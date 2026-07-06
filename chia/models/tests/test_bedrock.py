@@ -623,3 +623,56 @@ def test_live_converse_stream_log_tool_conversation(local_bash_tool):
     assert "CHIA_TOOL_OK" in stream[result_idx:], (
         "tool-result section missing the echoed sentinel\n" + stream
     )
+
+
+# ---------------------------------------------------------------------------
+# Permission controls (live): BedrockLLM is a raw-API backend with no permission
+# gate, so dangerously_skip_permissions / permission warn and are ignored. This
+# live test proves passing them does not break a real Converse call.
+# ---------------------------------------------------------------------------
+import warnings as _warnings  # noqa: E402
+
+
+@live
+def test_live_unsupported_permission_args_warn_but_run():
+    with _warnings.catch_warnings(record=True) as rec:
+        _warnings.simplefilter("always")
+        llm = BedrockLLM(
+            model=os.environ["BEDROCK_TEST_MODEL"],
+            system_message="You answer with a single word and nothing else.",
+            max_tokens=64,
+            dangerously_skip_permissions=True,
+            config={"x": "y"},
+        )
+    msgs = " ".join(str(w.message) for w in rec)
+    assert "does not support 'dangerously_skip_permissions'" in msgs
+    assert "does not support a 'config'" in msgs
+    cli = llm.prompt("Reply with exactly the word: PONG", tools=[])
+    assert cli.success is True
+    assert "PONG" in cli.result.upper()
+
+
+# Worker for this test: `chia up chia/models/tests/cluster/all_models.yaml`
+# (advertises bedrock_creds); the remote_prompt fixture skips if it's absent.
+@pytest.mark.live_remote
+def test_live_remote_unsupported_permission_args_warn_but_run(remote_prompt):
+    # Constructed locally (where the warning fires), then dispatched onto a
+    # bedrock_creds worker to confirm the ignored args don't break a real call.
+    model = os.environ.get("BEDROCK_TEST_MODEL")
+    if not model:
+        pytest.skip("BEDROCK_TEST_MODEL not set")
+    with _warnings.catch_warnings(record=True) as rec:
+        _warnings.simplefilter("always")
+        llm = BedrockLLM(
+            model=model,
+            system_message="You answer with a single word and nothing else.",
+            max_tokens=64,
+            dangerously_skip_permissions=True,
+            config={"x": "y"},
+        )
+    msgs = " ".join(str(w.message) for w in rec)
+    assert "does not support 'dangerously_skip_permissions'" in msgs
+    assert "does not support a 'config'" in msgs
+    cli = remote_prompt(llm, "Reply with exactly the word: PONG", "bedrock_creds")
+    assert cli.success is True
+    assert "PONG" in cli.result.upper()
