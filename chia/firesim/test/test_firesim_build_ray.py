@@ -36,6 +36,7 @@ import sys
 
 import ray
 
+from chia.base.ChiaFunction import get
 from chia.firesim.chia_functions import firesim_build_bitstream
 from chia.firesim.config import FireSimBuildConfig
 
@@ -102,7 +103,7 @@ def main():
     )
 
     print("  Waiting for result (this may take 1-3 hours)...")
-    result = ray.get(ref)
+    result = get(ref)
 
     print(f"\n  success: {result.success}")
     print(f"  agfi: {result.agfi}")

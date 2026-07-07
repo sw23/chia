@@ -49,7 +49,6 @@ from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 from chia.base.ChiaFunction import ChiaFunction, get
 from chia.base.tools.BashTool import BashTool
-from chia.base.tools.ChiaTool import ChiaTool
 
 _MARKERS = ("gcp", "ec2")          # remote-only marker resources (fallback)
 _TIMEOUT = float(os.environ.get("CHIA_XMACHINE_TIMEOUT", "180"))
@@ -189,7 +188,6 @@ class TestCrossMachine(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         if cls._ray_started:
-            ChiaTool._serve_started = False
             ray.shutdown()
 
     # -- role pinning ----------------------------------------------------

@@ -42,6 +42,7 @@ def load_build_artifact() -> BuildArtifact:
     with open(sim_path, "rb") as f:
         sim_content = f.read()
     return BuildArtifact(
+        name="chipyard",
         simulator_binary_content=sim_content,
         simulator_binary_name=METASIM_BINARY_NAME,
         config="FireSimRocketConfig",
