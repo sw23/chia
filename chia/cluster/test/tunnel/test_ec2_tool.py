@@ -29,7 +29,6 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from chia.base.tools.BashTool import BashTool
-from chia.base.tools.ChiaTool import ChiaTool
 
 HOST_HOSTNAME = socket.gethostname()
 
@@ -117,7 +116,6 @@ class TestEC2ToolCalls(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         if cls._ray_started:
-            ChiaTool._serve_started = False
             ray.shutdown()
 
     def _require_ec2(self):

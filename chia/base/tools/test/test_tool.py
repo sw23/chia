@@ -46,10 +46,8 @@ import uuid
 import ray
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
-from ray import serve
 
 from chia.base.tools.BashTool import BashTool
-from chia.base.tools.ChiaTool import ChiaTool
 
 HOST_HOSTNAME = socket.gethostname()
 
@@ -183,7 +181,6 @@ class _Base(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         if cls._ray_started:
-            ChiaTool._serve_started = False
             ray.shutdown()
 
 
@@ -273,8 +270,8 @@ class TestCrossNode(_Base):
         self.assertEqual(c2a, host_a)
 
     def test_local_same_docker(self):
-        """Case 7: local Docker <-> local Docker."""
-        _require("node_c", "node_c")
+        """Case 7: local Docker <-> same Docker, two tools."""
+        _require("node_c")
         host_c, host_d, c2d, d2c = self._cross_call("node_c", "node_c")
         self.assertEqual(host_c, _expected("node_c"))
         self.assertEqual(host_d, _expected("node_c"))
@@ -282,7 +279,7 @@ class TestCrossNode(_Base):
         self.assertEqual(d2c, host_c)
     
     def test_local_docker_docker(self):
-        """Case 7: local Docker <-> local Docker."""
+        """Case 8: local Docker <-> local Docker, different containers."""
         _require("node_c", "node_d")
         host_c, host_d, c2d, d2c = self._cross_call("node_c", "node_d")
         self.assertEqual(host_c, _expected("node_c"))
@@ -293,7 +290,7 @@ class TestCrossNode(_Base):
     # -- Different machines ---------------------------------------------
 
     def test_diff_bare_bare(self):
-        """Case 8: local bare-metal <-> remote bare-metal."""
+        """Case 9: local bare-metal <-> remote bare-metal."""
         _require("node_a", "node_e")
         host_a, host_e, a2e, e2a = self._cross_call("node_a", "node_e")
         self.assertEqual(host_a, _expected("node_a"))
@@ -302,7 +299,7 @@ class TestCrossNode(_Base):
         self.assertEqual(e2a, host_a)
 
     def test_diff_docker_bare(self):
-        """Case 9: local Docker <-> remote bare-metal."""
+        """Case 10: local Docker <-> remote bare-metal."""
         _require("node_c", "node_e")
         host_c, host_e, c2e, e2c = self._cross_call("node_c", "node_e")
         self.assertEqual(host_c, _expected("node_c"))
@@ -311,7 +308,7 @@ class TestCrossNode(_Base):
         self.assertEqual(e2c, host_c)
 
     def test_diff_docker_docker(self):
-        """Case 10: local Docker <-> remote Docker."""
+        """Case 11: local Docker <-> remote Docker."""
         _require("node_c", "node_g")
         host_c, host_g, c2g, g2c = self._cross_call("node_c", "node_g")
         self.assertEqual(host_c, _expected("node_c"))

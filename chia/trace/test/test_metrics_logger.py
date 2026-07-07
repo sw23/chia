@@ -44,6 +44,9 @@ def test_unknown_backend_raises():
 
 
 def test_tensorboard_backend():
+    # Imported here so the __main__ runner works in envs without pytest.
+    import pytest
+    pytest.importorskip("tensorboardX")
     with tempfile.TemporaryDirectory() as tmpdir:
         m = MetricsLogger.from_config({"backend": "tensorboard", "log_dir": tmpdir})
         assert isinstance(m._backend, TensorBoardBackend)
@@ -66,8 +69,12 @@ def test_from_config_does_not_mutate_input():
 TB_DEMO_DIR = "/tmp/chia_tb_demo"
 
 
-def test_tensorboard_demo():
-    """Log random curves to TensorBoard for visual inspection."""
+def demo_tensorboard():
+    """Log random curves to TensorBoard for visual inspection.
+
+    Not collected by pytest (no ``test_`` prefix); run via
+    ``python test/test_metrics_logger.py``.
+    """
     m = MetricsLogger.from_config({"backend": "tensorboard", "log_dir": TB_DEMO_DIR})
     random.seed(42)
     noise = 0.0
@@ -93,10 +100,15 @@ if __name__ == "__main__":
     print("test_from_config_ignores_extra_kwargs: PASS")
     test_unknown_backend_raises()
     print("test_unknown_backend_raises: PASS")
-    test_tensorboard_backend()
-    print("test_tensorboard_backend: PASS")
     test_from_config_does_not_mutate_input()
     print("test_from_config_does_not_mutate_input: PASS")
-    test_tensorboard_demo()
-    print("test_tensorboard_demo: PASS")
+    try:
+        import tensorboardX  # noqa: F401
+    except ImportError:
+        print("tensorboardX not installed; skipping tensorboard tests")
+    else:
+        test_tensorboard_backend()
+        print("test_tensorboard_backend: PASS")
+        demo_tensorboard()
+        print("demo_tensorboard: PASS")
     print("\nAll tests passed!")
