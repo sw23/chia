@@ -15,6 +15,10 @@ outputs/
 *.pem
 .env
 
+chia/esp/test/cluster/esp_site_env.sh
+chia/esp/test/cluster/.esp_rendered.yaml
+chia/esp/test/cluster/esp_fpga_tunnel.sh
+
 # Claude Code
 .claude/
 
