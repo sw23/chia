@@ -74,6 +74,7 @@ Originally CHIA stood for:
 
    api/base
    api/chipyard
+   api/esp
    api/models
    api/firesim
    api/vlsi

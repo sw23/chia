@@ -1,0 +1,97 @@
+# Chia cluster for the agentic ESP accelerator-kernel loop: one ESP
+# simulation worker (as in chia/esp/test/cluster/esp_xcelium.yaml) plus one
+# credentialed LLM worker that runs the Claude Code CLI.
+#
+# No hostnames or site paths live in this file — they come from environment
+# variables (expanded at config load), normally via the gitignored
+# esp_site_env.sh that esp_cluster.sh auto-sources; see
+# chia/esp/test/cluster/esp_site_env.example.sh. This config adds one more:
+#
+#   CHIA_ESP_CLAUDE_CONFIG  the .claude config dir (with credentials) to
+#                           mount into the LLM worker
+#
+# Bring up / tear down (from the repo root):
+#   ESP_CLUSTER_YAML=examples/esp_accel_loop/esp_loop_cluster.yaml \
+#       ./chia/esp/test/cluster/esp_cluster.sh up -y
+
+cluster_name: chia-esp-loop
+
+# The head must be identified by an IP routable FROM the sim host: loopback
+# here would make the remote worker join whatever listens on ITS OWN 6379.
+provider:
+    head_ip: "${CHIA_ESP_HEAD_IP}"
+
+auth:
+    ssh_user: ${USER}
+
+available_node_types:
+    # ESP sim worker. esp_xcelium models simulator seats; esp_fpga (capacity
+    # 1) serializes the attached board for the optional --fpga capstone.
+    # (esp_vivado — FPGA synthesis — is on the head; see below.)
+    esp_sim:
+        resources: {"esp": 4, "esp_xcelium": 4, "esp_fpga": 1}
+        num_workers: 1
+        # Quoted: an unquoted ${...} inside a YAML flow sequence parses as a
+        # flow mapping and errors out.
+        compatible_ips: ["${CHIA_ESP_SIM_HOST}"]
+        worker_setup_commands:
+            - "source /home/espuser/esp_env.sh"
+            - "${CHIA_ESP_CAD_ENV}"
+            # Vivado is needed once per checkout (Xilinx simlib compile) and
+            # its bin dir is not always covered by the CAD env script.
+            - "export PATH=$PATH:${CHIA_ESP_VIVADO_BIN}"
+            # vivado_hls (ESP's C++ accelerator flow) last shipped with
+            # Vivado 2020.1; appended last so a newer `vivado` still wins.
+            - "export PATH=$PATH:${CHIA_ESP_VIVADO_HLS_BIN}"
+        docker:
+            image: "ghcr.io/ucb-bar/chia-esp:latest"
+            container_name: "chia_esp_sim"
+            pull_before_run: false
+            run_options:
+                # One or more -v flags (items are space-joined). Bind the
+                # concrete tool subtrees, NOT an autofs root — binding the
+                # autofs mount point yields empty stub dirs in the container.
+                - ${CHIA_ESP_CAD_MOUNT_OPTS}
+                # Shared ESP workspace, same-path bind-mount, so the head's
+                # Vivado synth (--fpga) and this container share one tree.
+                - "-v ${CHIA_ESP_SHARED_WORKSPACE}:${CHIA_ESP_SHARED_WORKSPACE}"
+                # Required on rootless-podman hosts without subuid ranges
+                # (single-UID namespace: only container-root is mappable, and
+                # image layers are ownership-squashed); harmless under docker.
+                - --user root
+
+    # LLM worker: claude_creds is the resource chia.models.claude's prompt()
+    # requests (0.01/call), so kernel-writing calls schedule here.
+    esp_llm:
+        resources: {"llm": 2, "claude_creds": 2}
+        num_workers: 1
+        compatible_ips: ["${CHIA_ESP_SIM_HOST}"]
+        docker:
+            image: "ghcr.io/ucb-bar/chia-claude-code:latest"
+            container_name: "chia_esp_llm"
+            pull_before_run: false
+            run_options:
+                # Credentials for the claude CLI, which resolves its config
+                # under $HOME — the image bakes HOME=/home/ray, and that env
+                # survives --user root (needed on rootless-podman hosts; see
+                # the sim node's note).
+                - "-v ${CHIA_ESP_CLAUDE_CONFIG}:/home/ray/.claude"
+                - --user root
+
+head_env_commands:
+    - "${CHIA_HEAD_ENV_SETUP}"
+    # Synthesis toolchain for the head's esp_vivado worker (--fpga only).
+    - "${CHIA_ESP_SYN_ENV}"
+
+head_start_ray_commands:
+    - ray stop
+    # The head carries esp_vivado seats: FPGA synthesis (--fpga) runs here on
+    # the host userland, off the container. Whole line quoted so the inline
+    # resources JSON isn't parsed as a YAML flow mapping.
+    - "ulimit -c unlimited && ray start --head --port=6379 --include-dashboard=True --dashboard-agent-listen-port=0 --resources='{\"esp_vivado\": 2}'"
+
+worker_start_ray_commands:
+    - ray stop
+    - ray start --address=$RAY_HEAD_IP:6379 --dashboard-agent-listen-port=0
+
+file_mounts: {}
