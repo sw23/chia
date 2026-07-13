@@ -1,5 +1,5 @@
-gem5 ↔ BOOM Microarchitecture Alignment
-=======================================
+gem5-BOOM Microarchitecture Alignment
+============================================
 
 A CHIA case study that uses an LLM-in-the-loop to tune a `gem5
 <https://www.gem5.org/>`_ performance model until it matches a target `BOOM

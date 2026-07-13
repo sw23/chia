@@ -4,15 +4,6 @@
 # so chia is already installed — no COPY + pip install step here. Layers the
 # Google Antigravity CLI (`agy`) on top.
 #
-# Unlike Claude Code / Clarp Code, Antigravity ships as a single self-updating
-# native binary (no Node.js): its installer downloads a checksum-verified build
-# into $HOME/.local/bin/agy and runs `agy install` to configure the shell. So
-# this image only needs curl + tar + coreutils (sha512sum), all of which the
-# rayproject base already provides; we install curl/ca-certificates defensively.
-#
-# No build secret is required — the installer pulls from Google's public CDN,
-# not a private ucb-bar repo.
-#
 # ---------------------------------------------------------------------------
 # Build
 # ---------------------------------------------------------------------------
