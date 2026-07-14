@@ -57,9 +57,10 @@ Originally CHIA stood for:
    :caption: Case Studies
 
    case-studies/gem5-alignment
-   case-studies/circt-issue-solving
-   case-studies/timing-optimization
    case-studies/riscv-extensions
+   case-studies/timing-optimization
+   .. case-studies/architectural-discovery
+   case-studies/circt-issue-solving
 
 .. toctree::
    :maxdepth: 2
@@ -73,6 +74,7 @@ Originally CHIA stood for:
 
    api/base
    api/chipyard
+   api/esp
    api/models
    api/firesim
    api/vlsi
