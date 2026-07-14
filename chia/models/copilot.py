@@ -17,6 +17,7 @@ system-prompt flag), mirroring :class:`~chia.models.codex.CodexLLM`.
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
@@ -482,7 +483,13 @@ class CopilotLLM(LLMCallBase):
             # --allow-tool/--deny-tool also take optional values: =-joined tokens.
             # Without --allow-all(-tools), non-interactive copilot auto-approves
             # only safe tool uses and denies the rest rather than prompting.
-            for tool in self.allow_tools:
+            # Note: When allow_all=False, MCP servers provided to prompt() must be
+            # passed via --allow-tool, otherwise copilot will deny their use.
+            allow_tools = list(self.allow_tools)
+            for tool in tools or []:
+                if tool.name not in allow_tools:
+                    allow_tools.append(tool.name)
+            for tool in allow_tools:
                 cmd.append(f"--allow-tool={tool}")
             for tool in self.deny_tools:
                 cmd.append(f"--deny-tool={tool}")
@@ -496,18 +503,31 @@ class CopilotLLM(LLMCallBase):
 
     def _run_copilot(self, user_message: str, tools: list[ChiaTool] | None = None) -> CopilotQueryResult:
         resume_session_id = self._session_id if self._resume_session else None
-        result = subprocess.run(
-            self._build_cmd(
-                user_message,
-                tools or [],
-                resume_session_id=resume_session_id,
-            ),
-            capture_output=True,
-            text=True,
-            timeout=self.timeout_seconds,
-            cwd=self.work_dir or None,
-            env=os.environ.copy(),
-        )
+        try:
+            result = subprocess.run(
+                self._build_cmd(
+                    user_message,
+                    tools or [],
+                    resume_session_id=resume_session_id,
+                ),
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_seconds,
+                cwd=self.work_dir or None,
+                env=os.environ.copy(),
+            )
+        except OSError as exc:
+            # Handle prompt size greater than OS argument length limit (E2BIG)
+            if exc.errno == errno.E2BIG:
+                raise InvalidRequestError(
+                    node_id=self._get_node_id(),
+                    raw_message=(
+                        f"prompt of {len(user_message)} characters exceeds the OS "
+                        "argument length limit (E2BIG); consider writing content to "
+                        "one or more files and referencing them in the prompt."
+                    ),
+                ) from exc
+            raise
         stream, meta, final_text, result_code = self._parse_jsonl_stream(result.stdout, result.stderr)
         parsed_session_id = parse_session_id(result.stdout)
         if self._resume_session and parsed_session_id:

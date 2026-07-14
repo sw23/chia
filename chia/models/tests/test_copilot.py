@@ -147,6 +147,25 @@ def test_build_cmd_safe_permission_flags():
     assert "--deny-tool=shell(git push)" in cmd
 
 
+def test_build_cmd_safe_permissions_allow_prompt_mcp_tools():
+    # When allow_all=False, MCP servers passed to prompt() must be explicitly
+    # allowed, otherwise copilot disallows their tool calls.
+    tools = [
+        SimpleNamespace(name="calc", hostname="localhost", port=9001),
+        SimpleNamespace(name="shell(git:*)", hostname="localhost", port=9002),
+    ]
+    llm = CopilotLLM(allow_all=False, allow_tools=["shell(git:*)"])
+    cmd = llm._build_cmd("say pong", tools=tools)
+    assert "--allow-tool=calc" in cmd
+    # Already-allowed names are not duplicated.
+    assert cmd.count("--allow-tool=shell(git:*)") == 1
+    # The instance list is not mutated across calls.
+    assert llm.allow_tools == ["shell(git:*)"]
+
+    allow_all_cmd = CopilotLLM(allow_all=True)._build_cmd("say pong", tools=tools)
+    assert not any(arg.startswith("--allow-tool") for arg in allow_all_cmd)
+
+
 def test_parse_rate_limit_reset():
     reset = parse_rate_limit_reset("usage limit - resets 4pm (America/Los_Angeles)")
     assert reset is not None
@@ -346,6 +365,28 @@ def test_run_copilot_mcp_config(monkeypatch):
     assert cli.result == "4"
     config = capture["cmd"][capture["cmd"].index("--additional-mcp-config") + 1]
     assert json.loads(config)["mcpServers"]["calc"]["url"] == "http://localhost:9001/calc/mcp"
+
+
+def test_run_copilot_e2big_raises_invalid_request(monkeypatch):
+    import errno
+
+    def fake_run(cmd, **kwargs):
+        raise OSError(errno.E2BIG, "Argument list too long")
+
+    monkeypatch.setattr(copilot_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(CopilotLLM, "_get_node_id", lambda self: "test-node")
+    long_prompt = "x" * 500000
+    with pytest.raises(InvalidRequestError, match="argument length limit"):
+        CopilotLLM()._run_copilot(long_prompt, tools=[])
+
+
+def test_run_copilot_other_oserror_propagates(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        raise OSError(2, "No such file or directory")
+
+    monkeypatch.setattr(copilot_mod.subprocess, "run", fake_run)
+    with pytest.raises(OSError, match="No such file"):
+        CopilotLLM()._run_copilot("hi", tools=[])
 
 
 def test_classify_clean_success_no_raise():
