@@ -1,0 +1,81 @@
+# Ray cluster for the Mantis RTL design-bug loop — single-machine reference.
+#
+# One worker type, `mantis_design`: a container that holds the design checkout +
+# Mantis workspace AND has the coding agent + simulators installed. Unlike
+# circt_issue_solver (which runs the LLM on a separate worker and reaches the repo
+# over an MCP bash tool), Mantis co-locates the agent with the checkout so the
+# skills' native file tools and sub-agent swarms operate directly on the RTL. The
+# agent-prompt task is pinned back to this same node (NodeAffinity) and reserves a
+# `copilot_creds` slot, so this worker advertises BOTH resources.
+#
+#   mantis_design : N concurrent stage tasks per container (fan-out width)
+#   copilot_creds : N concurrent agent turns per container (nested prompt tasks)
+#
+# IMAGE REQUIREMENTS (supply your own; see README): git, the GitHub Copilot CLI
+# (`copilot`) on PATH, Icarus Verilog (`iverilog`/`vvp`) and/or Verilator, and the
+# chia py_worker env. Give the container several CPUs: each stage task blocks on a
+# nested agent-turn task on the same node, so it needs cpu headroom to avoid
+# self-starvation. Run the container with `--network none` once the design is
+# cloned to sandbox the AI-generated testbenches (drop the clone step then, or
+# pre-clone into a mounted volume).
+#
+# Host is read from CHIA_HEAD: `export CHIA_HEAD=$(hostname)` before `chia up`.
+cluster_name: mantis_rtl_loop
+
+available_node_types:
+    mantis_design:
+        resources: {"mantis_design": 2, "copilot_creds": 4}
+        balance_level: cluster
+        min_workers: 1
+        max_workers: 1
+        docker:
+            # TODO: replace with an image that has copilot + iverilog/verilator.
+            image: "ghcr.io/ucb-bar/chia-verilator-run:latest"
+            container_name: "mantis_rtl_loop_${USER}"
+            pull_before_run: True
+            run_options:
+                - --ulimit nofile=65536:65536
+                - --shm-size=10.24gb
+                - "--user $(id -u):$(id -g)"
+                # Mount the Copilot credential dir so the agent is authenticated
+                # in the container (see README for the auth flow).
+                - "-v ~/.copilot:/home/ray/.copilot"
+                - "-v $SSH_AUTH_SOCK:/ssh-agent"
+                - "-e SSH_AUTH_SOCK=/ssh-agent"
+            run_setup_commands:
+                - echo "user:x:$(id -u):$(id -g)::/home/ray:/bin/bash" >> /etc/passwd
+                - mkdir -p ~/.ssh && ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null || true
+                - git config --global user.email 'mantis_rtl_loop@chia' || true
+                - git config --global user.name  'mantis_rtl_loop'       || true
+                - git config --global --add safe.directory /workspace/design || true
+                - mkdir -p /workspace && chmod 777 /workspace || true
+        compatible_ips: ["${CHIA_HEAD}"]
+
+provider:
+    head_ip: ${CHIA_HEAD}
+
+auth:
+    ssh_user: ${USER}
+
+min_workers: 1
+max_workers: 1
+upscaling_speed: 1.0
+idle_timeout_minutes: 5
+
+file_mounts: {}
+cluster_synced_files: []
+file_mounts_sync_continuously: False
+rsync_exclude: ["**/.git", "**/.git/**"]
+rsync_filter: [".gitignore"]
+initialization_commands: []
+setup_commands: []
+worker_setup_commands: []
+
+head_setup_commands:
+    - "source ~/.bashrc && conda activate mantis_loop"
+head_start_ray_commands:
+    - "source ~/.bashrc && conda activate mantis_loop && ray stop"
+    - "source ~/.bashrc && conda activate mantis_loop && ulimit -c unlimited && ray start --head --port=6379 --include-dashboard=True --dashboard-agent-listen-port=0"
+worker_start_ray_commands:
+    - ray stop
+    - ray start --address=$RAY_HEAD_IP:6379 --dashboard-agent-listen-port=0
