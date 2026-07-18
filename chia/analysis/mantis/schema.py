@@ -83,10 +83,10 @@ REVIEW_STATUSES = (
 
 VIABILITY = ("VIABLE", "NON_VIABLE", "SAMPLE_OR_TEST", "CONDITIONAL_VIABLE")
 
-# Attacker starting position and resolved exposure tier (schema.json). New in the
+# Access starting position and resolved exposure tier (schema.json). New in the
 # upstream risk-calibration model; the deterministic scorer leaves the exposure
 # weighting to the LLM stage, but the harness carries the fields through.
-ATTACKER_POSITIONS = (
+ACCESS_POSITIONS = (
     "EXTERNAL",
     "INTERNAL_NETWORK",
     "IN_CLUSTER",
