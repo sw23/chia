@@ -8,10 +8,11 @@ design checkout, dispatching one discrete CHIA node per stage. Sequential stages
 run on the backbone; fan-out stages (researcher over investigations; review /
 critic / reproduce / patch over findings) spread concurrent tasks across the
 design workers and barrier before the next stage. Two control-flow edges wrap the
-backbone: the patch -> reproduce re-attack loop (re-hunt variants that bypass a
-fix) and the reflect -> architecture next-iteration loop (each pass re-reads the
-learnings the previous pass wrote). State is the workspace/ directory on the
-design worker; the head pulls it back only to render deterministic reports.
+backbone: the patch -> reproduce re-verification loop (re-hunt variants that a
+fix failed to fully resolve) and the reflect -> architecture next-iteration loop
+(each pass re-reads the learnings the previous pass wrote). State is the
+workspace/ directory on the design worker; the head pulls it back only to render
+deterministic reports.
 
 No GitHub writes; no host-run of AI-generated harnesses (they execute only inside
 the sandboxed SimTool on the design container).
@@ -85,22 +86,22 @@ def _run_stage(cfg, spec):
     return _fan_out(node, cfg, items, label)
 
 
-def _reattack(cfg, rounds):
-    """Re-hunt variants for findings whose patch was bypassed, up to `rounds`.
+def _reverify(cfg, rounds):
+    """Re-hunt variants for findings whose patch was incomplete, up to `rounds`.
 
-    The patch->reproduce edge: any finding still marked ``bypassed_patch`` gets
+    The patch->reproduce edge: any finding still marked ``bug_persists`` gets
     another reproduce+patch pass. Cheap when there's nothing to chase (the set is
     usually empty) and bounded by `rounds`.
     """
     for r in range(rounds):
         snap = get(stages.snapshot_workspace.chia_remote(cfg))
         bypassed = [f["id"] for f in snap["findings"]
-                    if f.get("reattack_status") == "bypassed_patch"]
+                    if f.get("reverify_status") == "bug_persists"]
         if not bypassed:
             return
-        logger.info("re-attack round %d: %d bypassed finding(s)", r + 1, len(bypassed))
-        _fan_out(stages.run_reproduce, cfg, bypassed, lambda i, fid: f"reattack_repro:{fid}")
-        _fan_out(stages.run_patch, cfg, bypassed, lambda i, fid: f"reattack_patch:{fid}")
+        logger.info("re-verify round %d: %d unresolved finding(s)", r + 1, len(bypassed))
+        _fan_out(stages.run_reproduce, cfg, bypassed, lambda i, fid: f"reverify_repro:{fid}")
+        _fan_out(stages.run_patch, cfg, bypassed, lambda i, fid: f"reverify_patch:{fid}")
 
 
 def _persist(iteration, snap, meta, out_dir):
@@ -165,8 +166,8 @@ def main() -> None:
         logger.info("===== iteration %d/%d =====", iteration, args.max_iters)
         for spec in selected:
             _run_stage(cfg, spec)
-            if spec.name == schema.STAGE_PATCH and flow_cfg.MAX_REATTACK_ROUNDS > 0:
-                _reattack(cfg, flow_cfg.MAX_REATTACK_ROUNDS)
+            if spec.name == schema.STAGE_PATCH and flow_cfg.MAX_REVERIFY_ROUNDS > 0:
+                _reverify(cfg, flow_cfg.MAX_REVERIFY_ROUNDS)
 
         snap = get(stages.snapshot_workspace.chia_remote(cfg))
         final_md = _persist(iteration, snap, {**meta_base, "iterations": iteration}, out_dir)

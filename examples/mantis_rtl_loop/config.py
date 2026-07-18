@@ -54,7 +54,7 @@ MODELS = {
 # Loop bounds + sandbox policy.
 # --------------------------------------------------------------------------- #
 MAX_ITERATIONS = 3          # reflect -> architecture next-loop passes
-MAX_REATTACK_ROUNDS = 1     # patch -> reproduce re-attack bypass rounds
+MAX_REVERIFY_ROUNDS = 1     # patch -> reproduce re-verification rounds
 PENDING_TIMEOUT_S = 1800    # chia_wait stuck-task detection / retry threshold
 
 # Only these binaries may run through the SimTool (executes AI-generated harnesses).

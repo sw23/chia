@@ -64,7 +64,7 @@ class StageSpec:
 
 # The ordered pipeline. This IS the graph: sequential unless a stage fans out,
 # in which case the driver runs its tasks concurrently and barriers before the
-# next stage. The reproduce->patch->reproduce re-attack and reflect->architecture
+# next stage. The reproduce->patch->reproduce re-verification and reflect->architecture
 # next-iteration edges are control flow the driver adds around this backbone.
 PIPELINE: Tuple[StageSpec, ...] = (
     StageSpec(schema.STAGE_ARCHITECTURE, True, TIER_FRONTIER, FANOUT_NONE, False, 2400,
@@ -84,9 +84,9 @@ PIPELINE: Tuple[StageSpec, ...] = (
     StageSpec(schema.STAGE_REPRODUCE, True, TIER_FRONTIER, FANOUT_FINDINGS, True, 3600,
               "Write + run a testbench/SVA/formal property in the sim sandbox."),
     StageSpec(schema.STAGE_CHAIN, True, TIER_FRONTIER, FANOUT_NONE, False, 2400,
-              "Combine validated findings into multi-step exploit chains."),
+              "Combine validated findings into multi-step bug chains."),
     StageSpec(schema.STAGE_PATCH, True, TIER_FRONTIER, FANOUT_FINDINGS, True, 5400,
-              "Generate + verify an RTL fix in the sim sandbox; re-attack."),
+              "Generate + verify an RTL fix in the sim sandbox; re-verify."),
     StageSpec(schema.STAGE_CALIBRATE, False, TIER_UTILITY, FANOUT_NONE, False, 600,
               "Deterministically score impact/likelihood/risk/priority."),
     StageSpec(schema.STAGE_REFLECT, True, TIER_UTILITY, FANOUT_NONE, False, 1200,

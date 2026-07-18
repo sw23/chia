@@ -45,8 +45,8 @@ reproduce*† → chain → patch*† → calibrate → reflect`
 `*` fans out (researcher over `plan.json` investigations; review/critic/reproduce/
 patch over findings). `†` runs AI-generated testbenches/formal harnesses, and does
 so **only** through the allow-listed `SimTool` sandbox. Two control-flow edges
-wrap the backbone: **patch → reproduce** (re-attack findings whose fix was
-bypassed) and **reflect → architecture** (each iteration re-reads the learnings
+wrap the backbone: **patch → reproduce** (re-verify findings whose fix was
+incomplete) and **reflect → architecture** (each iteration re-reads the learnings
 the previous pass wrote). `dedupe` and `calibrate` are deterministic: dedupe has
 the LLM only pick duplicate *groups* and merges them in Python; calibrate is pure
 scoring with no LLM.
@@ -56,7 +56,7 @@ scoring with no LLM.
 | File | Where it runs | Purpose |
 |---|---|---|
 | `config.py` | head | target design, dv-mantis path, backend, model tiers, timeouts, loop bounds |
-| `mantis_loop.py` | head | driver: prepare → walk PIPELINE → fan-out → re-attack → archive → report |
+| `mantis_loop.py` | head | driver: prepare → walk PIPELINE → fan-out → re-verify → archive → report |
 | `report.py` | head | deterministic findings-JSON → ranked Markdown report |
 | `cluster.yaml` | — | single `mantis_design` worker (agent + simulators + checkout) |
 | `run.sh` | head | `chia job submit` wrapper |

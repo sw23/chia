@@ -195,7 +195,7 @@ def run_plan(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 @ChiaFunction(resources={DESIGN_RESOURCE: 1})
 def run_chain(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """Combine validated findings into multi-step exploit-chain super-findings."""
+    """Combine validated findings into multi-step bug-chain super-findings."""
     return _agent_stage(cfg, schema.STAGE_CHAIN, "frontier",
                         cfg["timeouts"][schema.STAGE_CHAIN], needs_sim=False)
 
@@ -269,12 +269,12 @@ def run_reproduce(cfg: Dict[str, Any], finding_id: str) -> Dict[str, Any]:
 
 @ChiaFunction(resources={DESIGN_RESOURCE: 1})
 def run_patch(cfg: Dict[str, Any], finding_id: str) -> Dict[str, Any]:
-    """Generate + verify an RTL fix for one finding, then re-attack it."""
+    """Generate + verify an RTL fix for one finding, then re-verify it."""
     extra = _one_finding_extra(cfg, finding_id,
                                "Produce a minimal RTL fix, verify it blocks the "
                                "reproducer using ONLY the sim tool, then attempt a "
-                               "variant re-attack. Set `patch_status`, `patch_diff`, "
-                               "and `reattack_status`.")
+                               "variant re-verification. Set `patch_status`, `patch_diff`, "
+                               "and `reverify_status`.")
     out = _agent_stage(cfg, schema.STAGE_PATCH, "frontier",
                        cfg["timeouts"][schema.STAGE_PATCH], needs_sim=True, extra=extra)
     out["finding_id"] = finding_id
