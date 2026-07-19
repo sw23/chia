@@ -88,7 +88,7 @@ head_start_ray_commands:
     - ray stop
     # --include-dashboard=False keeps ports free on shared machines; CHIA
     # injects --node-ip-address plus the pinned head ports automatically.
-    - ray start --head --port=6379 --include-dashboard=False --dashboard-agent-listen-port=0
+    - ray start --head --port=6379 --include-dashboard=False --dashboard-agent-listen-port=0 --resources='{"head_node":4}'
 
 worker_start_ray_commands:
     - ray stop

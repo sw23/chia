@@ -59,7 +59,7 @@ head_env_commands: ["source ~/.bashrc && conda activate chia_env"]
 
 head_start_ray_commands:
     - ray stop
-    - ray start --head --port=6379 --include-dashboard=False --dashboard-agent-listen-port=0
+    - ray start --head --port=6379 --include-dashboard=False --dashboard-agent-listen-port=0 --resources='{"head_node":4}'
 
 worker_start_ray_commands:
     - ray stop

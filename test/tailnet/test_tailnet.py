@@ -190,7 +190,9 @@ class TestRelaySpec(unittest.TestCase):
 
         spec = build_relay_spec(config, allocs, "100.64.0.2")
         self.assertEqual(spec["socks_proxy"], tn.socks_proxy)
-        bind_ips = {e["bind_ip"] for e in spec["listeners"]}
+        socks = [e for e in spec["listeners"] if e.get("via", "socks") == "socks"]
+        direct = [e for e in spec["listeners"] if e.get("via") == "direct"]
+        bind_ips = {e["bind_ip"] for e in socks}
         # Head listeners present...
         self.assertIn(tn.head_advertise_ip, bind_ips)
         # ...remote peers present, same-host peers excluded.
@@ -199,20 +201,37 @@ class TestRelaySpec(unittest.TestCase):
                 self.assertNotIn(a.advertise_ip, bind_ips)
             else:
                 self.assertIn(a.advertise_ip, bind_ips)
-        # Destinations: every listener forwards to the same port on a
-        # tailnet IP.
-        for e in spec["listeners"]:
+        # SOCKS destinations are tailnet IPs.
+        for e in socks:
             self.assertTrue(e["dest_ip"].startswith("100.64."))
+        # Self-inbound tool bridges: 127.0.0.1:<tool port> -> own
+        # advertise IP, direct dial (tools bind the node IP while
+        # tailscaled delivers inbound to 127.0.0.1).
+        own = [a for k, a in allocs.items() if k[0] == "100.64.0.2"]
+        self.assertTrue(own)
+        for a in own:
+            for port in range(a.tool_port_min, a.tool_port_max + 1):
+                self.assertIn({"bind_ip": "127.0.0.1", "port": port,
+                               "dest_ip": a.advertise_ip, "via": "direct"},
+                              direct)
 
     def test_head_spec_has_no_head_listeners(self):
         config = build_config(_make_raw())
+        tn = config.tailnet_config
         assignments = assign_nodes(config)
         allocs = allocate_tailnet_workers(config, assignments)
         spec = build_relay_spec(config, allocs, None)
-        bind_ips = {e["bind_ip"] for e in spec["listeners"]}
-        self.assertNotIn(config.tailnet_config.head_advertise_ip, bind_ips)
+        socks = [e for e in spec["listeners"] if e.get("via", "socks") == "socks"]
+        bind_ips = {e["bind_ip"] for e in socks}
+        self.assertNotIn(tn.head_advertise_ip, bind_ips)
         for a in allocs.values():
             self.assertIn(a.advertise_ip, bind_ips)
+        # Head-local tool bridge covers the head tool range.
+        direct = [e for e in spec["listeners"] if e.get("via") == "direct"]
+        for port in range(tn.head_tool_port_min, tn.head_tool_port_max + 1):
+            self.assertIn({"bind_ip": "127.0.0.1", "port": port,
+                           "dest_ip": tn.head_advertise_ip, "via": "direct"},
+                          direct)
 
 
 class TestScripts(unittest.TestCase):

@@ -74,11 +74,15 @@ def _pump(src, dst):
         pass
 
 
-def _handle(conn, proxy, dest_ip, dest_port):
+def _handle(conn, proxy, dest_ip, dest_port, via="socks"):
     try:
-        up = socks5_connect(proxy, dest_ip, dest_port)
+        if via == "direct":
+            up = socket.create_connection((dest_ip, dest_port), timeout=15)
+        else:
+            up = socks5_connect(proxy, dest_ip, dest_port)
     except Exception as e:
-        sys.stderr.write("relay: dial %s:%d failed: %s\n" % (dest_ip, dest_port, e))
+        sys.stderr.write("relay: dial %s:%d (%s) failed: %s\n"
+                         % (dest_ip, dest_port, via, e))
         conn.close()
         return
     for s in (conn, up):
@@ -130,7 +134,8 @@ def main():
             entry = key.data
             threading.Thread(
                 target=_handle,
-                args=(conn, proxy, entry["dest_ip"], entry["port"]),
+                args=(conn, proxy, entry["dest_ip"], entry["port"],
+                      entry.get("via", "socks")),
                 daemon=True,
             ).start()
 
@@ -360,10 +365,26 @@ def build_relay_spec(
     # collide with the local Ray wildcard binds.
     for (cluster_ip, _, _), alloc in allocs.items():
         if cluster_ip == host_ip:
-            continue  # same host: local wildcard binds serve these directly
+            # Same host — Ray's wildcard binds serve inbound traffic
+            # directly, but ChiaTool uvicorn servers bind the node's
+            # advertise IP specifically, while tailscaled delivers
+            # inbound to 127.0.0.1. Bridge the tool ports with a local
+            # direct hop: 127.0.0.1:<port> -> <advertise_ip>:<port>.
+            for port in range(alloc.tool_port_min, alloc.tool_port_max + 1):
+                listeners.append({"bind_ip": "127.0.0.1", "port": port,
+                                  "dest_ip": alloc.advertise_ip,
+                                  "via": "direct"})
+            continue
         for port in alloc.ports():
             listeners.append({"bind_ip": alloc.advertise_ip, "port": port,
                               "dest_ip": alloc.tailnet_ip})
+    if host_ip is None:
+        # Same bridge for tools hosted on the head (bound to
+        # head_advertise_ip by the tool server).
+        for port in range(tn.head_tool_port_min, tn.head_tool_port_max + 1):
+            listeners.append({"bind_ip": "127.0.0.1", "port": port,
+                              "dest_ip": tn.head_advertise_ip,
+                              "via": "direct"})
 
     return {"socks_proxy": tn.socks_proxy, "listeners": listeners}
 

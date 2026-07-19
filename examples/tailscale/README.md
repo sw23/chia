@@ -81,7 +81,12 @@ chia up examples/tailscale/cluster.yaml        # add --dry-run to inspect first
 export RAY_ADDRESS=127.200.0.1:6379            # head_advertise_ip:gcs_port —
                                                # disambiguates on shared machines
                                                # that host other Ray clusters
-python examples/tailscale/flow.py              # smoke test
+python examples/tailscale/loop.py              # smoke test
+python examples/tailscale/connectivity-matrix.py   # full NxN sweep: ChiaFunctions
+                                               # dispatched from every machine to
+                                               # every machine, plus a BashTool
+                                               # hosted on each machine and called
+                                               # from each machine over MCP
 chia down examples/tailscale/cluster.yaml
 ```
 

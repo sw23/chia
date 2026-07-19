@@ -8,7 +8,7 @@ the tailnet.
 Run from the head machine (after ``chia up examples/tailscale/cluster.yaml``):
 
     conda activate chia_env
-    python examples/tailscale/flow.py
+    python examples/tailscale/loop.py
 """
 import os
 import socket
