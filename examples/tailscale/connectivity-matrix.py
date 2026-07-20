@@ -13,8 +13,11 @@ CHIA's communication styles:
 
 Machines are identified by the custom Ray resources the example configs
 advertise: ``head`` (the head's `ray start`), ``tailscale_worker``,
-and ``ec2_worker``. Only the tags present in the running cluster are
-swept, so this works on any of the example clusters.
+``ec2_worker``, and ``ec2_docker`` (a second, dockerized logical worker
+sharing the EC2 host). Only the tags present in the running cluster are
+swept, so this works on any of the example clusters. Two tags on one
+physical machine (``ec2_worker`` + ``ec2_docker``) still get their own
+row/column — the sweep verifies each logical worker independently.
 
 Run from the head machine (after ``chia up`` of any example config):
 
@@ -31,7 +34,7 @@ import ray
 from chia.base.ChiaFunction import ChiaFunction, get
 from chia.base.tools.BashTool import BashTool
 
-MACHINE_TAGS = ["head", "tailscale_worker", "ec2_worker"]
+MACHINE_TAGS = ["head", "tailscale_worker", "ec2_worker", "ec2_docker"]
 # Tiny resource slices so a dispatcher pinned to a machine can nest a
 # probe pinned to the same machine without exhausting its resource tag.
 FRACTION = 0.05

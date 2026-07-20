@@ -57,7 +57,7 @@ aws_nodes:
     region: us-east-1
     ec2_worker:
         KeyName: ${AWS_KEYPAIR}
-        InstanceType: t3.small
+        InstanceType: t3.medium
         count: 1
         ImageId: ami-0d001f8052688dc45   # Ubuntu 22.04 (us-east-1)
         ssh_user: ubuntu
@@ -82,16 +82,32 @@ available_node_types:
         # The default AWS setup creates chia_env (conda + ray + chia).
         worker_env_commands: ["source ~/.bashrc && conda activate chia_env"]
 
+    # A SECOND logical worker on the SAME EC2 machine, this one dockerized.
+    # It exercises two things at once:
+    #   1. Two workers sharing one physical host each get a distinct,
+    #      non-overlapping tailnet port block (per-machine block indexing:
+    #      block 0 at worker_block_base, block 1 at +worker_block_size).
+    #   2. A --net=host container joins the tailnet unchanged — it shares
+    #      the host netns, so its loopback advertise IP and the relay's
+    #      per-port bridges carry straight into the container.
+    # No worker_env_commands: the chia image already has ray + chia on its
+    # login-shell PATH (the default AWS setup installs docker on the host).
+    ec2_docker:
+        resources: {"ec2_docker": 2}
+        num_workers: 1
+        compatible_ips: ["@ec2_worker:0"]
+        docker:
+            image: ghcr.io/ucb-bar/chia:latest
+            container_name: chia-ec2-docker-${USER}
+            run_options:
+                - --ulimit nofile=65536:65536
+
 head_env_commands: ["source ~/.bashrc && conda activate chia_env"]
 
 head_start_ray_commands:
     - ray stop
-    # --include-dashboard=False keeps ports free on shared machines; CHIA
-    # injects --node-ip-address plus the pinned head ports automatically.
-    - ray start --head --port=6379 --include-dashboard=False --dashboard-agent-listen-port=0 --resources='{"head":4}'
+    - ray start --head --port=6379 --dashboard-agent-listen-port=0 --resources='{"head":4}'
 
 worker_start_ray_commands:
     - ray stop
-    # CHIA rewrites the address to the head's advertised loopback IP and
-    # injects --node-ip-address, pinned ports, and --resources.
     - ray start --address=$RAY_HEAD_IP:6379 --dashboard-agent-listen-port=0
