@@ -7,7 +7,7 @@ from chia.cluster.config import (
     ClusterConfig, ConfigError, NodeAssignment,
     apply_cloud_network_mode, assign_nodes, build_config, load_raw_config,
     parse_aws_nodes, parse_gcp_nodes,
-    _expand_node_placeholders, _inject_cloud_tunnel_overrides,
+    _expand_node_placeholders,
 )
 
 from chia.cluster.log import get_logger, setup_logging
