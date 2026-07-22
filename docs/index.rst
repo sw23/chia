@@ -59,7 +59,7 @@ Originally CHIA stood for:
    case-studies/gem5-alignment
    case-studies/riscv-extensions
    case-studies/timing-optimization
-   .. case-studies/architectural-discovery
+   case-studies/architectural-discovery-basic
    case-studies/circt-issue-solving
 
 .. toctree::

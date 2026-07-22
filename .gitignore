@@ -22,6 +22,9 @@ chia/esp/test/cluster/esp_fpga_tunnel.sh
 # Claude Code
 .claude/
 
+# planning artifacts
+.planning/
+
 # PDFs / docs not part of source
 *.pdf
 # ...but spec PDFs must ship in the job working-dir so the LLM can Read them
@@ -40,4 +43,6 @@ docs/_build/
 # OS
 .DS_Store
 
+# User-specific outputs and scratch
+*-log
 out/
