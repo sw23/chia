@@ -6,6 +6,7 @@ import subprocess
 from typing import Optional, Dict
 
 from chia.base.tools.ChiaTool import ChiaTool, ToolInfo
+from chia.base.sandbox_runner import LocalSubprocessRunner, SandboxRunner
 
 
 class BashTool(ChiaTool):
@@ -22,12 +23,17 @@ class BashTool(ChiaTool):
         work_dir: str = "/",
         timeout_seconds: int = 120,
         task_options: Optional[Dict] = None,
+        runner: "SandboxRunner | None" = None,
     ):
         super().__init__(name, task_options=task_options)
         self.work_dir = work_dir
         self.timeout_seconds = timeout_seconds
+        self.runner = runner or LocalSubprocessRunner()
 
-        self.mcp.add_tool(self.run_command, name=f"{name}_run_command")
+        # Short tool name: copilot namespaces MCP tools as "{server}-{tool}" and
+        # the combined string must stay under its 64-char limit; the server name
+        # (this tool's name) already scopes it.
+        self.mcp.add_tool(self.run_command, name="run_command")
         super().__post_init__()
 
     def run_command(self, command: str) -> str:
@@ -38,7 +44,7 @@ class BashTool(ChiaTool):
         # ``sh`` and grandchildren keep the stdout/stderr pipes open, which
         # stalls communicate() in cleanup and silently drops the response.
         try:
-            proc = subprocess.Popen(
+            proc = self.runner.popen(
                 command,
                 shell=True,
                 stdout=subprocess.PIPE,
