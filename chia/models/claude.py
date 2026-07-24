@@ -16,6 +16,7 @@ import ray
 
 from chia.base.ChiaFunction import ChiaFunction, ObjectRefCallback
 from chia.base.llm_call import QueryResult, LLMCallBase, UNSET
+from chia.base.sandbox_runner import LocalSubprocessRunner, SandboxRunner
 
 if TYPE_CHECKING:
     from chia.base.tools.ChiaTool import ChiaTool
@@ -368,6 +369,7 @@ class ClaudeCodeLLM(LLMCallBase):
         thinking: Optional[str] = "adaptive",
         max_tool_iterations: int = 100,
         dangerously_skip_permissions: bool = True,
+        runner: "SandboxRunner | None" = None,
         config=UNSET,
     ):
         super().__init__(system_message=system_message,
@@ -379,6 +381,7 @@ class ClaudeCodeLLM(LLMCallBase):
         self.timeout_seconds = timeout_seconds
         self.model = model
         self.extra_cli_args = extra_cli_args or []
+        self.runner = runner or LocalSubprocessRunner()
         self.logger = logging.getLogger(logging_name)
         self.log_stream = log_stream
         self.log_all = log_all
@@ -824,11 +827,9 @@ class ClaudeCodeLLM(LLMCallBase):
         self.logger.info("Running: %s", " ".join(cmd[:6]) + " ...")
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
-        result = subprocess.run(
+        result = self.runner.run(
             cmd,
             input=user_message,
-            capture_output=True,
-            text=True,
             timeout=self.timeout_seconds,
             env=env,
         )
@@ -900,7 +901,7 @@ class ClaudeCodeLLM(LLMCallBase):
                 if self._file is not None:
                     self._file.close()
 
-        proc = subprocess.Popen(
+        proc = self.runner.popen(
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,

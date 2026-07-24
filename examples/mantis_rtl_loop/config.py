@@ -8,7 +8,8 @@ Point ``SKILLS_ROOT`` at a checkout of https://github.com/sw23/dv-mantis and
 ``TARGET_REPO`` at the open-source RTL you want reviewed. The defaults review
 picorv32 (a small, single-file Verilog CPU that simulates cleanly under Icarus
 Verilog / Verilator), which keeps the reference loop fast to stand up. The loop
-itself is design-agnostic: only these globals change to retarget it.
+itself is design-agnostic: only these globals (or their env overrides) change to
+retarget it.
 """
 
 from __future__ import annotations
@@ -29,11 +30,15 @@ SKILLS_ROOT = os.environ.get(
 )
 
 # The design under review, checked out inside the design container at this path.
-TARGET_REPO_URL = "https://github.com/YosysHQ/picorv32"
-TARGET_REPO_COMMIT = "main"
-DESIGN_DIR = "/workspace/design"                 # design checkout on the worker
-WORKSPACE_DIR = "/workspace/design/mantis_workspace"  # findings/plan/kb/learnings
-SIM_WORK_DIR = "/workspace/design"               # sandbox cwd for the sim tool
+# Override via env vars to retarget without editing this file (e.g. from a
+# design-specific runner shipped alongside the RTL); defaults review picorv32.
+TARGET_REPO_URL = os.environ.get("MANTIS_TARGET_REPO", "https://github.com/YosysHQ/picorv32")
+TARGET_REPO_COMMIT = os.environ.get("MANTIS_TARGET_COMMIT", "main")
+# Paths default to the design-container layout (/workspace/...). For a local
+# single-node run (no container), override via MANTIS_DESIGN_DIR etc.
+DESIGN_DIR = os.environ.get("MANTIS_DESIGN_DIR", "/workspace/design")
+WORKSPACE_DIR = os.environ.get("MANTIS_WORKSPACE_DIR", DESIGN_DIR + "/mantis_workspace")
+SIM_WORK_DIR = os.environ.get("MANTIS_SIM_WORK_DIR", DESIGN_DIR)
 
 # --------------------------------------------------------------------------- #
 # Coding-agent backend + model tiering (README "Tiered Efficiency").
@@ -46,8 +51,8 @@ BACKEND = "copilot"
 CREDS_RESOURCE = "copilot_creds"
 REASONING_EFFORT = "high"
 MODELS = {
-    "frontier": "claude-opus-4-8",     # deep reasoning stages
-    "utility": "claude-haiku-4-5",     # fast utility stages
+    "frontier": "gpt-5.6-sol",     # deep reasoning stages
+    "utility": "gpt-5.6-sol",      # fast utility stages
 }
 
 # --------------------------------------------------------------------------- #
@@ -56,6 +61,45 @@ MODELS = {
 MAX_ITERATIONS = 3          # reflect -> architecture next-loop passes
 MAX_REVERIFY_ROUNDS = 1     # patch -> reproduce re-verification rounds
 PENDING_TIMEOUT_S = 1800    # chia_wait stuck-task detection / retry threshold
+
+# Agent execution sandbox: "openshell" (default; each agent turn runs inside a
+# locked-down NVIDIA OpenShell sandbox) or "local" (agent CLI as a plain worker
+# subprocess). OpenShell is the default; opt out with MANTIS_SANDBOX=local. See
+# docs/user_guides/openshell_agent_nodes.rst.
+SANDBOX = os.environ.get("MANTIS_SANDBOX", "openshell")
+
+# OpenShell sandbox configuration (used when SANDBOX == "openshell").
+#   * sandbox_from: a custom image (sandbox/Dockerfile) that bakes in a current
+#     copilot CLI (the base image's copilot is too old to know newer model slugs
+#     like gpt-5.6-sol), pre-creates /workspace/design (so the locked-down
+#     filesystem policy passes readiness), and installs iverilog/verilator.
+#   * policy: a locked-down base policy (deny-all network except copilot's model
+#     endpoints; non-root). chia injects the on-node MCP tool endpoints on top,
+#     bound to `agent_binaries`.
+#   * providers: map credential env vars to OpenShell provider types so the
+#     credential is injected into the sandbox as an env var (never onto disk).
+#     Proven: `COPILOT_GITHUB_TOKEN` from `gh auth token` + a current copilot CLI
+#     unlocks gpt-5.6-sol in the sandbox.
+#   * agent_binaries: sandbox-side path(s) allowed to reach the MCP tools. copilot
+#     is a node app, so node makes the network calls -- bind node too.
+OPENSHELL = {
+    "sandbox_from": str(FLOW_DIR / "sandbox"),
+    # copilot authenticates from GITHUB_TOKEN / COPILOT_GITHUB_TOKEN.
+    "providers": {"GITHUB_TOKEN": "github"},
+    # Native OpenShell provider(s) attached at creation (--provider). The
+    # pre-created `copilot` provider injects the credential + copilot's inference
+    # network rules. Create it once with:
+    #   COPILOT_GITHUB_TOKEN="$(gh auth token)" \
+    #     openshell provider create --name copilot --type copilot \
+    #     --credential COPILOT_GITHUB_TOKEN
+    "provider_names": ["copilot"],
+    "policy": str(FLOW_DIR / "lockdown-policy.yaml"),
+    # Verified: copilot lives at /usr/bin/copilot and node at /usr/bin/node in the
+    # image; node makes the HTTPS calls (including MCP).
+    "agent_binaries": ["/usr/bin/node", "/usr/bin/copilot"],
+    "gpu": False,
+    "reuse_sandbox": True,
+}
 
 # Only these binaries may run through the SimTool (executes AI-generated harnesses).
 SIM_ALLOWLIST = ["iverilog", "vvp", "verilator", "verilator_bin", "sby", "yosys", "make"]
@@ -85,6 +129,8 @@ def build_cfg() -> dict:
         "sim_allowlist": SIM_ALLOWLIST,
         "sim_timeout_s": SIM_TIMEOUT_S,
         "timeouts": TIMEOUTS,
+        "sandbox": SANDBOX,
+        "openshell": OPENSHELL,
         "system_prompt": (
             "You are a meticulous hardware design-verification engineer hunting "
             "for RTL design bugs and hardware-security weaknesses. Be rigorous, "

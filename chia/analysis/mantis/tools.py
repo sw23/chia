@@ -22,11 +22,13 @@ This module imports Ray/MCP (via ChiaTool) and is therefore imported on demand b
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 from typing import Any, Dict, List, Optional
 
 from chia.base.tools.ChiaTool import ChiaTool
+from chia.base.sandbox_runner import LocalSubprocessRunner, SandboxRunner
 from chia.analysis.mantis.finding_store import FindingStore
 
 
@@ -36,15 +38,17 @@ class FindingStoreTool(ChiaTool):
     def setup(self, workspace_dir: str):
         self.store = FindingStore(workspace_dir)
         self.store.ensure_dirs()
-        n = self.name
-        self.mcp.add_tool(self.list_findings, name=f"{n}_list_findings")
-        self.mcp.add_tool(self.read_finding, name=f"{n}_read_finding")
-        self.mcp.add_tool(self.write_finding, name=f"{n}_write_finding")
-        self.mcp.add_tool(self.update_finding, name=f"{n}_update_finding")
-        self.mcp.add_tool(self.append_finding_history, name=f"{n}_append_finding_history")
-        self.mcp.add_tool(self.delete_finding, name=f"{n}_delete_finding")
-        self.mcp.add_tool(self.finding_summaries, name=f"{n}_finding_summaries")
-        self.mcp.add_tool(self.append_learning, name=f"{n}_append_learning")
+        # Short tool names: copilot namespaces MCP tools as "{server}-{tool}",
+        # and the combined string must stay under its 64-char limit. The server
+        # name (this ChiaTool's name) already scopes them, so don't re-prefix.
+        self.mcp.add_tool(self.list_findings, name="list_findings")
+        self.mcp.add_tool(self.read_finding, name="read_finding")
+        self.mcp.add_tool(self.write_finding, name="write_finding")
+        self.mcp.add_tool(self.update_finding, name="update_finding")
+        self.mcp.add_tool(self.append_finding_history, name="append_finding_history")
+        self.mcp.add_tool(self.delete_finding, name="delete_finding")
+        self.mcp.add_tool(self.finding_summaries, name="finding_summaries")
+        self.mcp.add_tool(self.append_learning, name="append_learning")
 
     def list_findings(self) -> List[str]:
         """Return the ids of all findings currently in the workspace."""
@@ -113,12 +117,14 @@ class SimTool(ChiaTool):
     """Run an allow-listed simulator / formal tool in the sandbox workspace."""
 
     def setup(self, work_dir: str, timeout_seconds: int = 1800,
-              allowlist: Optional[List[str]] = None):
+              allowlist: Optional[List[str]] = None,
+              runner: "SandboxRunner | None" = None):
         self.work_dir = work_dir
         self.timeout_seconds = timeout_seconds
         self.allowlist = tuple(allowlist) if allowlist else DEFAULT_SIM_ALLOWLIST
-        self.mcp.add_tool(self.run_simulation, name=f"{self.name}_run_simulation")
-        self.mcp.add_tool(self.allowed_tools, name=f"{self.name}_allowed_tools")
+        self.runner = runner or LocalSubprocessRunner()
+        self.mcp.add_tool(self.run_simulation, name="run_simulation")
+        self.mcp.add_tool(self.allowed_tools, name="allowed_tools")
 
     def allowed_tools(self) -> List[str]:
         """List the simulator/formal binaries this tool is permitted to run."""
@@ -128,10 +134,14 @@ class SimTool(ChiaTool):
         """Run a single simulator/formal command in the sandbox and return output.
 
         The command's program (argv[0], after any leading VAR=val assignments)
-        must be in the allow-list — call ``allowed_tools`` to see it. Chain steps
-        with a Makefile target or a script the design provides rather than shell
-        operators. Returns a JSON string ``{exit_code, stdout, stderr}`` (output
-        truncated).
+        must be in the allow-list — call ``allowed_tools`` to see it. The command
+        is executed **without a shell** (``shell=False``): shell operators such
+        as ``&&``, ``|``, ``;``, backticks, ``$(...)`` and redirections are NOT
+        interpreted and are passed as literal argv tokens. To chain steps, use a
+        Makefile target (``make <target>``) or a script the design provides
+        rather than shell operators. Leading ``NAME=value`` tokens are applied
+        as environment variables (merged onto the current environment). Returns
+        a JSON string ``{exit_code, stdout, stderr}`` (output truncated).
         """
         try:
             argv = shlex.split(command)
@@ -149,17 +159,24 @@ class SimTool(ChiaTool):
                 "stderr": f"'{prog}' is not an allowed simulator/formal tool. "
                           f"Allowed: {', '.join(self.allowlist)}",
             })
+        # Collect the leading NAME=value tokens as env overrides and use the
+        # remaining tokens as the argv executed directly (no shell).
+        env = os.environ.copy()
+        for tok in argv[:prog_idx]:
+            name, _, value = tok.partition("=")
+            env[name] = value
+        exec_argv = argv[prog_idx:]
         try:
-            proc = subprocess.run(
-                command, shell=True, cwd=self.work_dir,
-                capture_output=True, text=True,
+            result = self.runner.run(
+                exec_argv, cwd=self.work_dir,
                 timeout=timeout_seconds or self.timeout_seconds,
+                env=env,
             )
         except subprocess.TimeoutExpired:
             return json.dumps({"exit_code": -1, "stdout": "",
                                "stderr": "simulation timed out"})
         return json.dumps({
-            "exit_code": proc.returncode,
-            "stdout": proc.stdout[-20000:],
-            "stderr": proc.stderr[-8000:],
+            "exit_code": result.returncode,
+            "stdout": result.stdout[-20000:],
+            "stderr": result.stderr[-8000:],
         })

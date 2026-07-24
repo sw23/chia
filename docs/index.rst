@@ -50,6 +50,7 @@ Originally CHIA stood for:
    user_guides/docker_images
    user_guides/caching_and_bypass
    user_guides/profiling
+   user_guides/openshell_agent_nodes
    user_guides/memcpy_example
 
 .. toctree::

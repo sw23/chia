@@ -1,0 +1,90 @@
+# Generic locked-down OpenShell policy for the Mantis RTL loop.
+#
+# Design-agnostic: works for ANY design under review (the loop always checks the
+# design out at DESIGN_DIR = /workspace/design). To review a different design you
+# change only the target repo in config.py -- this policy does not change.
+#
+# Proven end-to-end against the live gateway with the custom sandbox image
+# (sandbox/Dockerfile): a non-root copilot turn on gpt-5.6-sol succeeds while all
+# egress except the copilot model endpoints (and the injected MCP endpoints) is
+# denied.
+#
+# Intent / what is enforced:
+#   * Network: DENY-ALL except (a) copilot's model API and (b) the on-node MCP
+#     tool endpoints chia injects at runtime. No arbitrary internet, no GitHub
+#     repo/content access. (A coding agent cannot run with zero network -- it must
+#     reach its model -- so "locked down" = only these endpoints.)
+#   * Process: non-root `sandbox` user + seccomp.
+#   * Filesystem: fine-grained Landlock (default-deny) is ON. It re-grants the
+#     device nodes + /tmp the sandbox needs -- REQUIRED, because applying any
+#     policy otherwise makes /dev/null unwritable and breaks the sim stages (see
+#     the filesystem_policy note below). The container boundary still isolates the
+#     host FS; only the uploaded design lives in the sandbox.
+#
+# How the harness uses this file:
+#   config.py sets OPENSHELL["policy"] to this path. chia LOADS it and MERGES a
+#   `network_policies` block opening ONLY the on-node MCP tool endpoints
+#   (host.docker.internal:<port>), bound to OPENSHELL["agent_binaries"]. See
+#   chia/models/openshell.generate_mcp_egress_policy.
+#
+# Schema: https://docs.nvidia.com/openshell/sandboxes/policies
+version: 1
+
+# --- Process: unprivileged identity + seccomp (root is rejected by OpenShell). --
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+# --- Network: deny-all except copilot's model endpoints. ------------------------
+# copilot is a node app, so node makes the HTTPS calls -- the binaries list binds
+# these endpoints to node (and the copilot loader). chia appends a second block
+# for the MCP tool endpoints at runtime; everything else is denied by default.
+network_policies:
+  copilot_inference:
+    name: copilot-inference
+    endpoints:
+      - host: api.githubcopilot.com   # model list + inference
+        port: 443
+      - host: api.github.com          # auth / token exchange
+        port: 443
+      - host: github.com
+        port: 443
+    binaries:
+      - path: /usr/bin/node
+      - path: /usr/local/bin/node
+      - path: /usr/bin/copilot
+
+# --- Filesystem: fine-grained Landlock (default-deny) enforcement. --------------
+# Landlock is default-deny: only the paths listed below are reachable, everything
+# else on the container FS is denied. This block is REQUIRED, not optional --
+# whenever ANY OpenShell policy is applied the sandbox restricts /dev, and without
+# re-granting /dev/null (plus the other device nodes and /tmp) writes to /dev/null
+# are denied ("Permission denied" on a 0666 char device). That silently breaks the
+# reproduce & patch stages: cocotb Makefiles, configure scripts, and anything that
+# redirects to /dev/null fail inside the sandbox, the agent burns its context on the
+# errors, and the model returns HTTP 400 (surfacing as copilot 'invalid_request').
+#
+# Notes (verified against gateway 0.0.90 with the custom sandbox image):
+#   * The sandbox user's HOME is /sandbox and OpenShell always grants /sandbox
+#     read-write as a baseline, so the design checkout (/sandbox/design), the
+#     Mantis workspace, and copilot's session state (~/.copilot) are writable
+#     WITHOUT listing /sandbox here.
+#   * /dev/tty + /tmp must be granted or the exec/supervisor channel dies
+#     ("connection closed by remote host") -- that is why an earlier attempt which
+#     read_wrote only the design dir broke the channel.
+#   * Do NOT add /dev/ptmx, /dev/full, or an explicit /sandbox / /home entry: on
+#     this build they push the container into a provisioning restart loop.
+#   * best_effort applies whatever the running kernel's Landlock ABI supports and
+#     degrades gracefully on older kernels.
+filesystem_policy:
+  read_only: []
+  read_write:
+    - /tmp
+    - /workspace
+    - /dev/null
+    - /dev/zero
+    - /dev/urandom
+    - /dev/tty
+  include_workdir: true
+landlock:
+  compatibility: best_effort

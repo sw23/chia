@@ -35,6 +35,12 @@ logger = logging.getLogger("mantis.stages")
 # (which has iverilog/verilator/sby installed), so one resource label suffices.
 DESIGN_RESOURCE = "mantis_design"
 
+# Path the design checkout is uploaded to inside the OpenShell sandbox, where the
+# agent runs entirely over this copy. It lives under /sandbox -- a baseline
+# read-write path OpenShell always grants -- so the agent reaches it without the
+# policy's filesystem_policy having to enumerate it.
+SANDBOX_DESIGN_DIR = "/sandbox/design"
+
 
 # --------------------------------------------------------------------------- #
 # Shared helpers (module-level, not nodes).
@@ -48,24 +54,100 @@ def _here():
     return {"scheduling_strategy": NodeAffinitySchedulingStrategy(node_id=node, soft=False)}
 
 
-def _build_llm(cfg: Dict[str, Any], tier: str, timeout_s: int):
+def _openshell_runner_for(cfg, tools):
+    """Return an OpenShellRunner when cfg selects the openshell sandbox, else None.
+
+    The agent runs inside the sandbox with a default-deny network policy, so the
+    only egress opened is to the live MCP tool endpoints the harness stands up.
+    That rule is injected onto the base policy in ``cfg['openshell']['policy']``
+    (a dict, or a YAML file path which is loaded and merged) and bound to the
+    agent binaries in ``cfg['openshell']['agent_binaries']`` -- OpenShell admits
+    a connection only when both the endpoint and calling binary match.
+    """
+    if cfg.get("sandbox") != "openshell":
+        return None
+    import dataclasses
+
+    from chia.models.openshell import (
+        OpenShellConfig, OpenShellRunner, generate_mcp_egress_policy,
+    )
+    osh = dict(cfg.get("openshell") or {})
+    base_policy = osh.pop("policy", None)
+    binaries = osh.get("agent_binaries") or []
+
+    # A base policy may be an inline dict or a YAML file path. Load a path so we
+    # can merge the MCP egress rule into it (otherwise the sandboxed agent would
+    # have no route to its own tools under the default-deny network policy).
+    if isinstance(base_policy, str):
+        import yaml
+        with open(base_policy) as fh:
+            base_policy = yaml.safe_load(fh) or {}
+    # Only open MCP egress when the stage stands up host-MCP tools. When the agent
+    # instead uses copilot's built-in tools inside the sandbox (no host MCP), no
+    # egress rule is added and the base network lockdown applies as-is.
+    if tools:
+        policy = generate_mcp_egress_policy(
+            tools, base_policy=base_policy, binaries=binaries
+        )
+    else:
+        policy = base_policy
+
+    # Upload the design checkout (incl. its mantis_workspace) into the sandbox,
+    # and download the agent's workspace writes back afterward so the harness's
+    # host-side (deterministic) stages and reporting see them.
+    design_dir = cfg.get("design_dir")
+
+    # Filter to recognized OpenShellConfig fields so unknown cfg keys don't crash.
+    field_names = {f.name for f in dataclasses.fields(OpenShellConfig)}
+    kwargs = {k: v for k, v in osh.items() if k in field_names}
+    if design_dir:
+        # Upload the checkout to /sandbox so it lands at /sandbox/design
+        # (= SANDBOX_DESIGN_DIR), a baseline read-write path.
+        kwargs.setdefault("uploads", [(design_dir, "/sandbox")])
+        # `download` copies the folder's CONTENTS into DEST, so target the host
+        # mantis_workspace dir directly (not its parent).
+        kwargs.setdefault(
+            "downloads",
+            [(SANDBOX_DESIGN_DIR + "/mantis_workspace",
+              design_dir + "/mantis_workspace")],
+        )
+    config = OpenShellConfig(policy=policy, **kwargs)
+    return OpenShellRunner(config)
+
+
+def _build_llm(cfg: Dict[str, Any], tier: str, timeout_s: int, tools=None):
     """Construct the coding-agent backend for a stage.
 
     Backend and per-tier model names come from ``cfg`` so the loop is
     config-swappable (Copilot by default; Claude and others supported).
+
+    When ``cfg['sandbox'] == 'openshell'`` an :class:`OpenShellRunner` (whose
+    egress policy is derived from ``tools``) is injected so the agent CLI runs
+    inside the sandbox; otherwise ``runner`` is ``None`` and the backends fall
+    back to their default local-subprocess behavior.
     """
     model = cfg["models"][tier]
     system_message = cfg.get("system_prompt", "")
     backend = cfg.get("backend", "copilot")
     design_dir = cfg["design_dir"]
     effort = cfg.get("reasoning_effort")
+    runner = _openshell_runner_for(cfg, tools)
+    # In sandbox mode the design is uploaded to a fixed in-sandbox path; the
+    # agent's work_dir must be that path, not the host checkout.
+    work_dir = SANDBOX_DESIGN_DIR if cfg.get("sandbox") == "openshell" else design_dir
 
     if backend == "copilot":
         from chia.models.copilot import CopilotLLM
         return CopilotLLM(
             model=model, system_message=system_message,
-            timeout_seconds=timeout_s, work_dir=design_dir,
+            timeout_seconds=timeout_s, work_dir=work_dir,
             allow_all=True, reasoning_effort=effort, resume_session=False,
+            runner=runner,
+            # Disable copilot's built-in remote GitHub MCP server: the harness
+            # provides its own tools, and an auto-attached network GitHub tool
+            # would breach the review's isolation (the sandbox network policy
+            # blocks it too, but this stops it even in local mode).
+            extra_cli_args=["--disable-builtin-mcps"],
         )
     if backend == "claude":
         from chia.models.claude import ClaudeCodeLLM
@@ -74,6 +156,7 @@ def _build_llm(cfg: Dict[str, Any], tier: str, timeout_s: int):
             model=model, system_message=system_message,
             timeout_seconds=timeout_s, extra_cli_args=extra,
             resume_session=False, projects_cwd=None,
+            runner=runner,
         )
     raise ValueError(f"unsupported backend {backend!r} (use 'copilot' or 'claude')")
 
@@ -88,6 +171,13 @@ def _stage_tools(cfg: Dict[str, Any], stage_name: str, needs_sim: bool, here: Di
     from chia.base.tools.BashTool import BashTool
     from chia.analysis.mantis.tools import FindingStoreTool, SimTool
 
+    if cfg.get("sandbox") == "openshell":
+        # The agent runs entirely inside the OpenShell sandbox and uses copilot's
+        # built-in tools over the uploaded design checkout (sims run on the
+        # sandbox image's iverilog/verilator). No host-MCP tools are stood up, so
+        # untrusted AI-generated code never executes on the host.
+        return [], (lambda: None)
+
     suffix = f"{stage_name}"
     bash = BashTool(name=f"mantis_bash_{suffix}", work_dir=cfg["design_dir"],
                     timeout_seconds=300, task_options=here)
@@ -95,6 +185,10 @@ def _stage_tools(cfg: Dict[str, Any], stage_name: str, needs_sim: bool, here: Di
                              task_options=here)
     tools = [bash, store]
     if needs_sim:
+        # SimTool executes AI-generated sim commands through the hardened,
+        # shell-free LocalSubprocessRunner: shell operators are not interpreted
+        # and the argv[0] allow-list is enforced, making it the isolation
+        # boundary for untrusted sim code in local (non-sandbox) mode.
         tools.append(SimTool(f"mantis_sim_{suffix}", cfg["sim_work_dir"],
                              timeout_seconds=cfg.get("sim_timeout_s", 1800),
                              allowlist=cfg.get("sim_allowlist"),
@@ -151,12 +245,22 @@ def _agent_stage(cfg: Dict[str, Any], stage_name: str, tier: str, timeout_s: int
                  needs_sim: bool, extra: Optional[str] = None) -> Dict[str, Any]:
     """Run a generic agent-driven stage: render skill prompt, dispatch, clean up."""
     here = _here()
+    # In sandbox mode the agent sees the design at the fixed in-sandbox path, so
+    # the prompt must reference those paths, not the host checkout locations.
+    if cfg.get("sandbox") == "openshell":
+        design_dir = SANDBOX_DESIGN_DIR
+        workspace_dir = SANDBOX_DESIGN_DIR + "/mantis_workspace"
+    else:
+        design_dir = cfg["design_dir"]
+        workspace_dir = cfg["workspace_dir"]
     prompt = skill_loader.render_stage_prompt(
-        cfg["skills_root"], stage_name, cfg["workspace_dir"], cfg["design_dir"], extra
+        cfg["skills_root"], stage_name, workspace_dir, design_dir, extra
     )
-    llm = _build_llm(cfg, tier, timeout_s)
+    # Build tools before the LLM: when sandbox="openshell", _build_llm derives
+    # the agent's MCP egress policy from these live tool endpoints.
     tools, cleanup = _stage_tools(cfg, stage_name, needs_sim, here)
     try:
+        llm = _build_llm(cfg, tier, timeout_s, tools=tools)
         out = _dispatch(cfg, llm, prompt, tools, here)
     finally:
         cleanup()

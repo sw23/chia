@@ -32,6 +32,7 @@ import ray
 
 from chia.base.ChiaFunction import ChiaFunction, ObjectRefCallback
 from chia.base.llm_call import QueryResult, LLMCallBase, UNSET
+from chia.base.sandbox_runner import LocalSubprocessRunner, SandboxRunner
 
 if TYPE_CHECKING:
     from chia.base.tools.ChiaTool import ChiaTool
@@ -84,6 +85,10 @@ class InvalidRequestError(CopilotError):
     error_type = "invalid_request"
 
 
+class ContentFilterError(CopilotError):
+    error_type = "content_filter"
+
+
 class ServerError(CopilotError):
     error_type = "server_error"
 
@@ -101,12 +106,38 @@ _RESET_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Classification is FIRST-MATCH-IN-TUPLE-ORDER: the first class whose patterns
+# match wins. Order specific matchers BEFORE broader ones. In particular,
+# ``MaxOutputTokensError`` and ``ContentFilterError`` MUST stay ahead of
+# ``InvalidRequestError``: their errors arrive as an HTTP 400 (a context-window
+# overflow, or a content-safety flag) whose descriptive phrases would otherwise
+# be shadowed by InvalidRequestError's blunt ``"400"`` substring and mislabeled as
+# ``invalid_request``. For the same reason the bare HTTP-status codes
+# (``"400"``/``"500"``/``"503"``) are the last, broadest entries in each class and
+# their classes must not be reordered above the descriptive matchers here.
 _ERROR_PATTERNS: tuple[tuple[type[CopilotError], tuple[str, ...]], ...] = (
     (
         AuthenticationError,
         ("not logged in", "login", "authentication", "unauthorized", "401", "api key", "auth token"),
     ),
     (BillingError, ("billing", "payment", "402", "credit", "quota exceeded")),
+    # Context-window / output-token overflow. MUST precede InvalidRequestError so
+    # its specific phrases beat that class's bare "400" (see the note above).
+    (
+        MaxOutputTokensError,
+        ("max output", "maximum output", "output token limit", "context length",
+         "context window", "maximum context", "context_length_exceeded",
+         "too many tokens", "maximum number of tokens", "prompt is too long",
+         "request too large"),
+    ),
+    # Provider content-safety filter (e.g. security research read as exploitation).
+    # MUST precede InvalidRequestError so its specific phrases beat that class's
+    # bare "400". Non-retryable: the same content re-triggers the filter.
+    (
+        ContentFilterError,
+        ("flagged for possible", "content_filter", "content management policy",
+         "responsible ai", "cybersecurity risk"),
+    ),
     (
         InvalidRequestError,
         ("invalid request", "malformed", "bad request", "invalid model", "unknown model",
@@ -116,11 +147,6 @@ _ERROR_PATTERNS: tuple[tuple[type[CopilotError], tuple[str, ...]], ...] = (
         ServerError,
         ("500", "503", "server error", "overloaded", "internal error", "service unavailable",
          "connection", "timeout", "timed out"),
-    ),
-    (
-        MaxOutputTokensError,
-        ("max output", "maximum output", "output token limit", "context length",
-         "context window", "truncated"),
     ),
 )
 
@@ -318,6 +344,7 @@ class CopilotLLM(LLMCallBase):
         allow_all: bool = True,
         reasoning_effort: str | None = None,
         resume_session: bool = False,
+        runner: "SandboxRunner | None" = None,
         config=UNSET,
     ):
         # copilot's --allow-all also disables path and URL verification, so it
@@ -338,6 +365,7 @@ class CopilotLLM(LLMCallBase):
         self.deny_tools = deny_tools or []
         self.allow_all = allow_all
         self.reasoning_effort = reasoning_effort
+        self.runner = runner or LocalSubprocessRunner()
         self.logger = logging.getLogger(logging_name)
         self._call_counter = 0
         self._resume_session = resume_session
@@ -390,7 +418,7 @@ class CopilotLLM(LLMCallBase):
                 self._capture_session_state(cli)
                 cli.success = True
                 return cli
-            except (RateLimitError, AuthenticationError, BillingError, InvalidRequestError):
+            except (RateLimitError, AuthenticationError, BillingError, InvalidRequestError, ContentFilterError):
                 raise
             except MaxOutputTokensError:
                 if attempt == 0:
@@ -504,17 +532,15 @@ class CopilotLLM(LLMCallBase):
     def _run_copilot(self, user_message: str, tools: list[ChiaTool] | None = None) -> CopilotQueryResult:
         resume_session_id = self._session_id if self._resume_session else None
         try:
-            result = subprocess.run(
+            result = self.runner.run(
                 self._build_cmd(
                     user_message,
                     tools or [],
                     resume_session_id=resume_session_id,
                 ),
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds,
                 cwd=self.work_dir or None,
                 env=os.environ.copy(),
+                timeout=self.timeout_seconds,
             )
         except OSError as exc:
             # Handle prompt size greater than OS argument length limit (E2BIG)

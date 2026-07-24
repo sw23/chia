@@ -117,6 +117,25 @@ production silicon or shared lab equipment. All findings are AI-generated and
 **must be verified by a hardware engineer** before being acted upon — see the
 dv-mantis README's responsible-use notes.
 
+`SimTool` runs its allow-listed program **without a shell**, so shell operators
+(`&&`, `|`, `;`, `$(...)`) are not interpreted and the `argv[0]` allow-list is
+actually enforced — chain steps with a Makefile target or a design-provided
+script rather than shell operators.
+
+### OpenShell sandbox (default)
+
+By default each agent turn runs inside an
+[NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) sandbox (declarative
+filesystem / network / process / inference policy) rather than a local subprocess,
+for stronger isolation. To run agents as plain local subprocesses instead, set
+`SANDBOX = "local"` (or `export MANTIS_SANDBOX=local`). The `OPENSHELL` block in
+`config.py` configures the sandbox. A generic locked-down base policy (default-deny
+network, minimal read-write filesystem) that works for any design is provided at
+`lockdown-policy.yaml`. The egress allow-list for the harness MCP tools is
+generated automatically. See
+[docs/user_guides/openshell_agent_nodes](../../docs/user_guides/openshell_agent_nodes.rst)
+for prerequisites and topology guidance.
+
 ## Notes
 
 - **Single machine.** `cluster.yaml` runs head + one design worker on one host.

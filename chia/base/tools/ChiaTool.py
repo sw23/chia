@@ -292,7 +292,13 @@ class _ToolServerActor:
         max_port = int(os.environ.get("CHIA_TOOL_MAX_PORT", "0"))
         max_tries = (max_port - base_port + 1) if max_port else 100
 
-        bind_ip = ray.util.get_node_ip_address()
+        # CHIA_TOOL_BIND_HOST overrides the interface uvicorn binds to. Default is
+        # the node IP; set it to 0.0.0.0 so agents running in an OpenShell sandbox
+        # (a separate container) can reach the tool via the host bridge, paired
+        # with CHIA_TOOL_ADVERTISE_HOST=host.docker.internal for the advertised URL.
+        bind_ip = os.environ.get(
+            "CHIA_TOOL_BIND_HOST", ray.util.get_node_ip_address()
+        )
         port = start_router(tool, bind_ip, base_port=base_port, max_tries=max_tries)
         node_id = ray.get_runtime_context().get_node_id()
         self._name = tool.name
